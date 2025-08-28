@@ -1,0 +1,30 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Specifies the database provider and connection URL.
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Specifies the generator for Prisma Client.
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Defines the model for the 'Stock' table.
+model Stock {
+  id          Int      @id @default(autoincrement())
+  symbol      String   @unique
+  ticker      String
+  close       Float
+  description String
+  sector      String
+  submarket   String?
+  subtype     String
+  type        String
+  exchange    String
+  country     String
+  currency    String
+  industry    String
+}
