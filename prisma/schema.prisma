@@ -12,6 +12,19 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Role enum for RBAC
+enum Role {
+  USER
+  ADMIN
+}
+
+// Token types used for verification/password reset
+enum TokenType {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+  REFRESH
+}
+
 // Defines the model for the 'Stock' table.
 model Stock {
   id          Int      @id @default(autoincrement())
@@ -27,4 +40,46 @@ model Stock {
   country     String
   currency    String
   industry    String
+}
+
+// Users table for authentication and roles
+model User {
+  id              Int       @id @default(autoincrement())
+  email           String    @unique
+  password        String
+  name            String?
+  isEmailVerified Boolean   @default(false)
+  role            Role      @default(USER)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  // relations
+  refreshTokens   RefreshToken[]
+  verificationTokens VerificationToken[]
+}
+
+// Refresh tokens (stored server-side so we can revoke)
+model RefreshToken {
+  id         Int       @id @default(autoincrement())
+  tokenHash  String    @unique
+  user       User      @relation(fields: [userId], references: [id])
+  userId     Int
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  revoked    Boolean   @default(false)
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// One-time tokens for email verification & password reset
+model VerificationToken {
+  id        Int       @id @default(autoincrement())
+  token     String    @unique
+  type      TokenType
+  user      User      @relation(fields: [userId], references: [id])
+  userId    Int
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  used      Boolean   @default(false)
+  @@index([userId])
+  @@index([expiresAt])
 }
