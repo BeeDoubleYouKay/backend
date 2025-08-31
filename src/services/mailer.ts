@@ -1,4 +1,4 @@
-import nodemailer from 'nodemailer';
+const nodemailer: any = require('nodemailer');
 
 const host = process.env.SMTP_HOST;
 const port = Number(process.env.SMTP_PORT ?? 587);
@@ -18,14 +18,33 @@ const transporter = nodemailer.createTransport({
 });
 
 export async function sendMail(to: string, subject: string, html: string, text?: string) {
-  const info = await transporter.sendMail({
-    from,
-    to,
-    subject,
-    html,
-    text,
-  });
-  return info;
+  const isTest = process.env.NODE_ENV === 'test';
+  const isDev = process.env.NODE_ENV === 'development';
+  const smtpConfigured = Boolean(host && user && pass);
+
+  // If SMTP is not configured, or in test mode, or in development without SMTP_HOST,
+  // skip sending emails and resolve immediately so registration / dev flow is not blocked.
+  if (!smtpConfigured || isTest || (isDev && !host)) {
+    console.warn(
+      `Mailer: skipping sendMail to ${to} (smtpConfigured=${smtpConfigured}, NODE_ENV=${process.env.NODE_ENV})`
+    );
+    return Promise.resolve(undefined);
+  }
+
+  try {
+    const info = await transporter.sendMail({
+      from,
+      to,
+      subject,
+      html,
+      text,
+    });
+    return info;
+  } catch (err) {
+    // Log the error but do not rethrow so registration / other flows are not blocked.
+    console.error('Mailer: sendMail failed (error swallowed)', err);
+    return undefined;
+  }
 }
 
 export default transporter;

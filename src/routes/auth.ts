@@ -1,5 +1,6 @@
 import express from 'express';
-import { body, validationResult } from 'express-validator';
+const ev: any = require('express-validator');
+const { body, validationResult } = ev;
 import { PrismaClient } from '@prisma/client';
 import {
   registerUser,
@@ -21,9 +22,21 @@ router.post(
   body('password').isLength({ min: 8 }),
   body('name').optional().isString().trim().isLength({ max: 100 }),
   async (req, res) => {
+    // DEBUG-AUTH-REG: log incoming headers/body to diagnose validation failures (debug-only)
+    try {
+      console.log('DEBUG-AUTH-REG req.headers:', JSON.stringify(req.headers || {}));
+    } catch (e) {
+      console.log('DEBUG-AUTH-REG req.headers: <unserializable>');
+    }
+    try {
+      console.log('DEBUG-AUTH-REG req.body:', JSON.stringify(req.body || {}));
+    } catch (e) {
+      console.log('DEBUG-AUTH-REG req.body: <unserializable>');
+    }
+
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-
+ 
     const { email, password, name } = req.body;
     try {
       const { user, verificationToken } = await registerUser(email, password, name);

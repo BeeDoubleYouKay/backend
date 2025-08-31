@@ -33,12 +33,13 @@ function sha256Hex(input: string) {
 
 // --- JWT helpers ---
 export function signAccessToken(payload: object) {
-  return jwt.sign(payload, ACCESS_TOKEN_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES });
+  // Cast secrets/options to types expected by jsonwebtoken to satisfy its TypeScript overloads.
+  return jwt.sign(payload as any, ACCESS_TOKEN_SECRET as unknown as jwt.Secret, { expiresIn: ACCESS_TOKEN_EXPIRES as any });
 }
 
 export function verifyAccessToken(token: string) {
   try {
-    return jwt.verify(token, ACCESS_TOKEN_SECRET) as any;
+    return jwt.verify(token as any, ACCESS_TOKEN_SECRET as unknown as jwt.Secret) as any;
   } catch (err) {
     return null;
   }

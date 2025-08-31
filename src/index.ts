@@ -12,6 +12,7 @@ export const app = express();
 const prisma = new PrismaClient();
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // support form-encoded bodies (fix validation when clients send form data)
 app.use(cookieParser());
 
 // Basic rate limiter for auth endpoints
