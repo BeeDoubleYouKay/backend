@@ -49,29 +49,43 @@ export function verifyAccessToken(token: string) {
 
 export async function registerUser(email: string, password: string, name?: string) {
   const normalized = email.trim().toLowerCase();
+  console.log('DEBUG-REGISTER normalized:', normalized);
   const existing = await prisma.user.findUnique({ where: { email: normalized } });
+  console.log('DEBUG-REGISTER existing:', JSON.stringify(existing, null, 2));
   if (existing) throw new Error('Email already registered');
 
   const pwdHash = await hashPassword(password);
-  const user = await prisma.user.create({
-    data: {
-      email: normalized,
-      password: pwdHash,
-      name,
-    },
-  });
+
+  let user;
+  try {
+    user = await prisma.user.create({
+      data: {
+        email: normalized,
+        password: pwdHash,
+        name,
+      },
+    });
+  } catch (e: any) {
+    console.error('DEBUG-REGISTER create user failed:', e && e.message ? e.message : e);
+    throw e;
+  }
 
   const tokenRaw = randomTokenHex(32);
   const expiresAt = new Date(Date.now() + VERIFICATION_TOKEN_EXPIRES_HOURS * 3600 * 1000);
 
-  await prisma.verificationToken.create({
-    data: {
-      token: tokenRaw,
-      type: TokenType.EMAIL_VERIFY,
-      userId: user.id,
-      expiresAt,
-    },
-  });
+  try {
+    await prisma.verificationToken.create({
+      data: {
+        token: tokenRaw,
+        type: TokenType.EMAIL_VERIFY,
+        userId: user.id,
+        expiresAt,
+      },
+    });
+  } catch (e: any) {
+    console.error('DEBUG-REGISTER create verificationToken failed:', e && e.message ? e.message : e);
+    throw e;
+  }
 
   return { user, verificationToken: tokenRaw };
 }

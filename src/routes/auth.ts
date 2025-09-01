@@ -53,10 +53,10 @@ router.post(
 
       res.status(201).json({ message: 'Registered. Please verify your email.' });
     } catch (err: any) {
+      console.error('DEBUG-AUTH-REG handler error:', err && err.message ? err.message : err);
       if (err.message && err.message.includes('Email already registered')) {
         return res.status(409).json({ error: 'Email already registered' });
       }
-      console.error(err);
       res.status(500).json({ error: 'Registration failed' });
     }
   }

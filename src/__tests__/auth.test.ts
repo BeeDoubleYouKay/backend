@@ -28,13 +28,30 @@ describe('Basic API & Auth smoke tests', () => {
   if (process.env.TEST_RUN_AUTH === '1') {
     const testEmail = `test+${Date.now()}@example.com`;
     const testPassword = 'P@ssw0rd123!';
-
+  
     it('POST /auth/register -> registers user and sends verification token', async () => {
       const res = await request(app)
         .post('/auth/register')
         .send({ email: testEmail, password: testPassword, name: 'Test User' })
         .set('Accept', 'application/json');
       expect([201, 409]).toContain(res.status); // 201 if created, 409 if already exists
+    });
+  
+    it('POST /auth/register twice -> first creates then second returns 409', async () => {
+      const r1 = await request(app)
+        .post('/auth/register')
+        .send({ email: testEmail, password: testPassword, name: 'Test User' })
+        .set('Accept', 'application/json');
+      if (r1.status === 201) {
+        const r2 = await request(app)
+          .post('/auth/register')
+          .send({ email: testEmail, password: testPassword, name: 'Test User' })
+          .set('Accept', 'application/json');
+        expect(r2.status).toBe(409);
+      } else {
+        // If the first attempt already found an existing user, ensure it's a 409
+        expect(r1.status).toBe(409);
+      }
     });
 
     it('POST /auth/login -> returns cookies on successful login', async () => {

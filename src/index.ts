@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import express, { Request, Response } from 'express';
 import cookieParser from 'cookie-parser';
+import cors from 'cors';
 import csurf from 'csurf';
 import rateLimit from 'express-rate-limit';
 import { PrismaClient } from '@prisma/client';
@@ -14,6 +15,15 @@ const prisma = new PrismaClient();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // support form-encoded bodies (fix validation when clients send form data)
 app.use(cookieParser());
+
+// CORS: allow frontend origins (set APP_CORS_ORIGINS="http://localhost:5000,http://192.168.4.30:5000")
+// If APP_CORS_ORIGINS is not set, allow requests from any origin (dev convenience)
+const corsOptionRaw = process.env.APP_CORS_ORIGINS ?? '';
+const corsOptions: any = {
+  origin: corsOptionRaw ? corsOptionRaw.split(',').map((s) => s.trim()) : true,
+  credentials: true,
+};
+app.use(cors(corsOptions));
 
 // Basic rate limiter for auth endpoints
 const authLimiter = rateLimit({

@@ -32,14 +32,14 @@ model Stock {
   ticker      String
   close       Float
   description String
-  sector      String
+  sector      String?
   submarket   String?
   subtype     String
   type        String
   exchange    String
-  country     String
+  country     String?
   currency    String
-  industry    String
+  industry    String?
 }
 
 // Users table for authentication and roles
@@ -48,10 +48,10 @@ model User {
   email           String    @unique
   password        String
   name            String?
-  isEmailVerified Boolean   @default(false)
+  isEmailVerified Boolean   @map("is_email_verified") @default(false)
   role            Role      @default(USER)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt       DateTime  @map("created_at") @default(now())
+  updatedAt       DateTime  @map("updated_at") @updatedAt
   // relations
   refreshTokens   RefreshToken[]
   verificationTokens VerificationToken[]
@@ -60,11 +60,11 @@ model User {
 // Refresh tokens (stored server-side so we can revoke)
 model RefreshToken {
   id         Int       @id @default(autoincrement())
-  tokenHash  String    @unique
+  tokenHash  String    @map("token_hash") @unique
   user       User      @relation(fields: [userId], references: [id])
-  userId     Int
-  createdAt  DateTime  @default(now())
-  expiresAt  DateTime
+  userId     Int       @map("user_id")
+  createdAt  DateTime  @map("created_at") @default(now())
+  expiresAt  DateTime  @map("expires_at")
   revoked    Boolean   @default(false)
   @@index([userId])
   @@index([expiresAt])
@@ -76,9 +76,9 @@ model VerificationToken {
   token     String    @unique
   type      TokenType
   user      User      @relation(fields: [userId], references: [id])
-  userId    Int
-  createdAt DateTime  @default(now())
-  expiresAt DateTime
+  userId    Int       @map("user_id")
+  createdAt DateTime  @map("created_at") @default(now())
+  expiresAt DateTime  @map("expires_at")
   used      Boolean   @default(false)
   @@index([userId])
   @@index([expiresAt])

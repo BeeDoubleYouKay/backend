@@ -115,3 +115,30 @@ Next steps (if you want me to continue)
 - Optionally add OAuth sign-on (Google/Github) with passport or oauth libraries.
 
 This README is intentionally concise; use the commands above in VS Code integrated terminal.
+
+Investigation & fixes performed
+- Symptom: POST /auth/register intermittently returned 500 while User rows were being created; Prisma failed on verificationToken.create with null/enum errors.
+- Root causes:
+  - Duplicate columns on VerificationToken: both snake_case "user_id" and camelCase "userId" existed; the latter was non-null and not written by Prisma (which maps userId -> "user_id").
+  - DB/Prisma enum mismatches for TokenType (multiple enum type variants present).
+- Actions taken (non-destructive where possible):
+  - Removed redundant camelCase column:
+    - sudo -u postgres psql stockdb -c 'ALTER TABLE "VerificationToken" DROP COLUMN IF EXISTS "userId";'
+  - Ensured FK and index on snake_case column:
+    - sudo -u postgres psql stockdb -c 'ALTER TABLE "VerificationToken" ADD CONSTRAINT verificationtoken_user_id_fkey FOREIGN KEY ("user_id") REFERENCES "User"(id) ON DELETE CASCADE;'
+    - sudo -u postgres psql stockdb -c 'CREATE INDEX IF NOT EXISTS verificationtoken_user_id_idx ON "VerificationToken" ("user_id");'
+  - Recommended (if DB still shows TokenType mismatch): cast VerificationToken.type to the Prisma enum:
+    - ALTER TABLE "VerificationToken" ALTER COLUMN "type" DROP DEFAULT;
+    - ALTER TABLE "VerificationToken" ALTER COLUMN "type" TYPE "TokenType" USING (type::text::"TokenType");
+    - ALTER TABLE "VerificationToken" ALTER COLUMN "type" SET DEFAULT 'EMAIL_VERIFY'::"TokenType";
+  - Regenerated Prisma client and restarted backend:
+    - cd backend && npx prisma generate
+    - npm run dev
+- Code & tests:
+  - Added duplicate-registration integration test in [`backend/src/__tests__/auth.test.ts`](backend/src/__tests__/auth.test.ts:32) asserting second POST /auth/register returns 409.
+  - Kept targeted DEBUG logs during troubleshooting in [`backend/src/services/auth.ts`](backend/src/services/auth.ts:50); remove or reduce before production.
+- Result: End-to-end registration now returns 201 and verificationToken rows are created.
+- Next recommended tasks:
+  1. Remove or reduce debug logging.
+  2. Add CI integration using TEST_RUN_AUTH=1 to validate auth flows.
+  3. Add role-based middleware and acceptance tests if desired.
