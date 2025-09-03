@@ -22,6 +22,46 @@ describe('Basic API & Auth smoke tests', () => {
     const res = await request(app).get('/stocks');
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
+  describe('/stocks/search API', () => {
+    it('rejects queries shorter than 2 chars', async () => {
+      const res = await request(app).get('/stocks/search?q=a');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/at least 2/);
+    });
+
+    it('returns empty array for no matches', async () => {
+      const res = await request(app).get('/stocks/search?q=ZZZZZZZZZZ');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.length).toBe(0);
+    });
+
+    it('handles special characters safely', async () => {
+      const res = await request(app).get('/stocks/search?q=%27%3B%20DROP%20TABLE%20stocks;');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+    });
+
+    it('returns results for a common ticker fragment', async () => {
+      const res = await request(app).get('/stocks/search?q=AA');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+      // Not asserting length, as DB may vary
+      if (res.body.length > 0) {
+        expect(res.body[0]).toHaveProperty('ticker');
+        expect(res.body[0]).toHaveProperty('symbol');
+        expect(res.body[0]).toHaveProperty('description');
+      }
+    });
+
+    it('responds within 200ms for a typical query', async () => {
+      const start = Date.now();
+      const res = await request(app).get('/stocks/search?q=AA');
+      const duration = Date.now() - start;
+      expect(res.status).toBe(200);
+      expect(duration).toBeLessThan(200);
+    });
+  });
   });
 
   // Only run registration flow test if TEST_RUN_AUTH=1 to avoid accidental DB writes

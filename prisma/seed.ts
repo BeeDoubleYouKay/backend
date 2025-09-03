@@ -18,7 +18,7 @@ async function main() {
         email: adminEmail.toLowerCase(),
         password: pwdHash,
         name: 'Admin',
-        role: Role.ADMIN,
+        role: 'ADMIN',
         isEmailVerified: true,
       },
     });
@@ -44,7 +44,40 @@ async function main() {
   }
 }
 
+// Bulk seed 10,000+ stocks for search performance testing
+async function seedStocks() {
+  const count = await prisma.stock.count();
+  if (count >= 10000) {
+    console.log('Stock table already seeded with', count, 'records.');
+    return;
+  }
+  const stocks = [];
+  for (let i = 0; i < 10000; i++) {
+    stocks.push({
+      ticker: `TICK${i}`,
+      symbol: `SYM${i}`,
+      close: Math.random() * 1000,
+      description: `Test stock number ${i} for search performance`,
+      sector: 'Tech',
+      submarket: null,
+      subtype: 'Common',
+      type: 'Equity',
+      exchange: 'NASDAQ',
+      country: 'US',
+      currency: 'USD',
+      industry: 'Software'
+    });
+  }
+  // Insert in batches to avoid exceeding parameter limits
+  for (let i = 0; i < stocks.length; i += 1000) {
+    await prisma.stock.createMany({ data: stocks.slice(i, i + 1000), skipDuplicates: true });
+    console.log(`Seeded stocks ${i} to ${i + 999}`);
+  }
+  console.log('Seeded 10,000 stocks for search testing.');
+}
+
 main()
+  .then(seedStocks)
   .catch((e) => {
     console.error(e);
     process.exit(1);

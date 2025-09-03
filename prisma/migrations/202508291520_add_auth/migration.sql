@@ -2,8 +2,7 @@
 BEGIN;
 
 -- Enums for roles and token types
-CREATE TYPE role AS ENUM ('USER','ADMIN');
-CREATE TYPE token_type AS ENUM ('EMAIL_VERIFY','PASSWORD_RESET','REFRESH');
+-- Enums already created in initial migration
 
 -- Users table
 CREATE TABLE "User" (
@@ -18,6 +17,15 @@ CREATE TABLE "User" (
 );
 
 -- Ensure case-insensitive unique emails
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'User_email_key'
+  ) THEN
+    DROP INDEX "User_email_key";
+  END IF;
+END $$;
+
 CREATE UNIQUE INDEX "User_email_key" ON "public"."User"(lower(email));
 
 -- Refresh tokens (server-side stored so they can be revoked)

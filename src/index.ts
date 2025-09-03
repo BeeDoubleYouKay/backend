@@ -52,21 +52,59 @@ app.get('/stocks', async (req: Request, res: Response) => {
   }
 });
 
+import { LRUCache } from 'lru-cache';
+
+const stockSearchCache = new LRUCache<string, any[]>({
+  max: 200,
+  ttl: 1000 * 60 * 5 // 5 minutes
+});
+
 app.get('/stocks/search', async (req: Request, res: Response) => {
   const query = (req.query.q as string)?.trim();
   if (!query || query.length < 2) {
     return res.status(400).json({ error: 'Query must be at least 2 characters.' });
   }
+  const cacheKey = query.toLowerCase();
+  if (stockSearchCache.has(cacheKey)) {
+    return res.json(stockSearchCache.get(cacheKey));
+  }
   try {
-    const stocks = await prisma.stock.findMany({
-      where: {
-        OR: [
-          { ticker: { contains: query, mode: 'insensitive' } },
-          { description: { contains: query, mode: 'insensitive' } }
-        ]
-      },
-      select: { symbol: true, ticker: true, description: true, close: true }
-    });
+    // Use parameterized query to prevent SQL injection and handle special chars
+    const results = await prisma.$queryRawUnsafe<any[]>(`
+      SELECT
+        id, ticker, symbol, description, sector,
+        -- Rank: 2 = exact match, 1 = startswith, 0 = fuzzy
+        CASE
+          WHEN LOWER(ticker) = LOWER($1) OR LOWER(symbol) = LOWER($1) THEN 2
+          WHEN LOWER(ticker) LIKE LOWER($1 || '%') OR LOWER(symbol) LIKE LOWER($1 || '%') THEN 1
+          ELSE 0
+        END AS match_rank,
+        ts_rank(
+          to_tsvector('english', coalesce(ticker,'') || ' ' || coalesce(symbol,'') || ' ' || coalesce(description,'')),
+          plainto_tsquery('english', $1)
+        ) AS relevance
+      FROM "Stock"
+      WHERE
+        (
+          to_tsvector('english', coalesce(ticker,'') || ' ' || coalesce(symbol,'') || ' ' || coalesce(description,'')) @@ plainto_tsquery('english', $1)
+          OR LOWER(ticker) LIKE LOWER('%' || $1 || '%')
+          OR LOWER(symbol) LIKE LOWER('%' || $1 || '%')
+          OR LOWER(description) LIKE LOWER('%' || $1 || '%')
+        )
+      ORDER BY match_rank DESC, relevance DESC
+      LIMIT 20
+    `, query);
+
+    // Only return required fields
+    const stocks = results.map(r => ({
+      id: r.id,
+      ticker: r.ticker,
+      symbol: r.symbol,
+      description: r.description,
+      sector: r.sector
+    }));
+
+    stockSearchCache.set(cacheKey, stocks);
     res.json(stocks);
   } catch (error) {
     res.status(500).json({ error: 'Failed to search stocks.' });
