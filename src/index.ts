@@ -72,7 +72,7 @@ app.get('/stocks/search', async (req: Request, res: Response) => {
     // Use parameterized query to prevent SQL injection and handle special chars
     const results = await prisma.$queryRawUnsafe<any[]>(`
       SELECT
-        id, ticker, symbol, description, sector,
+        id, ticker, close, description, sector, exchange, industry,
         -- Rank: 2 = exact match, 1 = startswith, 0 = fuzzy
         CASE
           WHEN LOWER(ticker) = LOWER($1) OR LOWER(symbol) = LOWER($1) THEN 2
@@ -96,12 +96,24 @@ app.get('/stocks/search', async (req: Request, res: Response) => {
     `, query);
 
     // Only return required fields
-    const stocks = results.map(r => ({
+    interface SearchStock {
+      id: number;
+      ticker: string;
+      close: number;
+      description: string;
+      sector: string | null;
+      exchange: string;
+      industry: string | null;
+    }
+
+    const stocks: SearchStock[] = results.map(r => ({
       id: r.id,
       ticker: r.ticker,
-      symbol: r.symbol,
+      close: Number(r.close),
       description: r.description,
-      sector: r.sector
+      sector: r.sector ?? null,
+      exchange: r.exchange,
+      industry: r.industry ?? null
     }));
 
     stockSearchCache.set(cacheKey, stocks);
