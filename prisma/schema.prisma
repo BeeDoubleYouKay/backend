@@ -55,6 +55,7 @@ model User {
   // relations
   refreshTokens   RefreshToken[]
   verificationTokens VerificationToken[]
+  portfolios      Portfolio[]
 }
 
 // Refresh tokens (stored server-side so we can revoke)
@@ -82,4 +83,32 @@ model VerificationToken {
   used      Boolean   @default(false)
   @@index([userId])
   @@index([expiresAt])
+}
+
+// Portfolios for users
+model Portfolio {
+  id        Int       @id @default(autoincrement()) @map("id")
+  name      String    @map("name")
+  user      User      @relation(fields: [userId], references: [id])
+  userId    Int       @map("user_id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  holdings  PortfolioHolding[]
+  @@index([userId])
+}
+
+model PortfolioHolding {
+  id               Int       @id @default(autoincrement()) @map("id")
+  portfolio        Portfolio @relation(fields: [portfolioId], references: [id])
+  portfolioId      Int       @map("portfolio_id")
+  // Note: no explicit relation field on Stock to avoid modifying the existing Stock model.
+  // The foreign key column is present so references to Stock.id can be made via stockId.
+  stockId          Int       @map("stock_id")
+  quantity         Float     @map("quantity")
+  averageCostPrice Float     @map("average_cost_price")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  @@unique([portfolioId, stockId])
+  @@index([portfolioId])
+  @@index([stockId])
 }
