@@ -12,6 +12,19 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Role enum for RBAC
+enum Role {
+  USER
+  ADMIN
+}
+
+// Token types used for verification/password reset
+enum TokenType {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+  REFRESH
+}
+
 // Defines the model for the 'Stock' table.
 model Stock {
   id          Int      @id @default(autoincrement())
@@ -19,12 +32,83 @@ model Stock {
   ticker      String
   close       Float
   description String
-  sector      String
+  sector      String?
   submarket   String?
   subtype     String
   type        String
   exchange    String
-  country     String
+  country     String?
   currency    String
-  industry    String
+  industry    String?
+}
+
+// Users table for authentication and roles
+model User {
+  id              Int       @id @default(autoincrement())
+  email           String    @unique
+  password        String
+  name            String?
+  isEmailVerified Boolean   @map("is_email_verified") @default(false)
+  role            Role      @default(USER)
+  createdAt       DateTime  @map("created_at") @default(now())
+  updatedAt       DateTime  @map("updated_at") @updatedAt
+  // relations
+  refreshTokens   RefreshToken[]
+  verificationTokens VerificationToken[]
+  portfolios      Portfolio[]
+}
+
+// Refresh tokens (stored server-side so we can revoke)
+model RefreshToken {
+  id         Int       @id @default(autoincrement())
+  tokenHash  String    @map("token_hash") @unique
+  user       User      @relation(fields: [userId], references: [id])
+  userId     Int       @map("user_id")
+  createdAt  DateTime  @map("created_at") @default(now())
+  expiresAt  DateTime  @map("expires_at")
+  revoked    Boolean   @default(false)
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// One-time tokens for email verification & password reset
+model VerificationToken {
+  id        Int       @id @default(autoincrement())
+  token     String    @unique
+  type      TokenType
+  user      User      @relation(fields: [userId], references: [id])
+  userId    Int       @map("user_id")
+  createdAt DateTime  @map("created_at") @default(now())
+  expiresAt DateTime  @map("expires_at")
+  used      Boolean   @default(false)
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Portfolios for users
+model Portfolio {
+  id        Int       @id @default(autoincrement()) @map("id")
+  name      String    @map("name")
+  user      User      @relation(fields: [userId], references: [id])
+  userId    Int       @map("user_id")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  holdings  PortfolioHolding[]
+  @@index([userId])
+}
+
+model PortfolioHolding {
+  id               Int       @id @default(autoincrement()) @map("id")
+  portfolio        Portfolio @relation(fields: [portfolioId], references: [id])
+  portfolioId      Int       @map("portfolio_id")
+  // Note: no explicit relation field on Stock to avoid modifying the existing Stock model.
+  // The foreign key column is present so references to Stock.id can be made via stockId.
+  stockId          Int       @map("stock_id")
+  quantity         Float     @map("quantity")
+  averageCostPrice Float     @map("average_cost_price")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+  @@unique([portfolioId, stockId])
+  @@index([portfolioId])
+  @@index([stockId])
 }

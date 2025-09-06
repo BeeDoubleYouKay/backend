@@ -1,3 +1,23 @@
+-- Drop old enums if they exist (for dev reset)
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'Role') THEN
+    DROP TYPE "Role";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'TokenType') THEN
+    DROP TYPE "TokenType";
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role') THEN
+    DROP TYPE role;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'tokentype') THEN
+    DROP TYPE tokentype;
+  END IF;
+END $$;
+
+-- Create enums for role and token_type (lowercase, to match Prisma/Postgres convention)
+CREATE TYPE role AS ENUM ('USER', 'ADMIN');
+CREATE TYPE token_type AS ENUM ('EMAIL_VERIFY', 'PASSWORD_RESET', 'REFRESH');
+
 -- CreateTable
 CREATE TABLE "public"."Stock" (
     "id" SERIAL NOT NULL,
