@@ -6,6 +6,7 @@ import {
   registerUser,
   loginUser,
   logoutByRefreshToken,
+  refreshAccessToken,
   requestPasswordReset,
   performPasswordReset,
   verifyEmailToken,
@@ -122,6 +123,32 @@ router.post('/logout', async (req, res) => {
   res.clearCookie('access_token').clearCookie('refresh_token').json({ message: 'Logged out' });
 });
 
+// Refresh access token using refresh token cookie
+router.post('/refresh', async (req, res) => {
+  const refresh = req.cookies && req.cookies['refresh_token'];
+  if (!refresh) return res.status(401).json({ error: 'No refresh token' });
+  try {
+    const { accessToken, refreshToken, user } = await refreshAccessToken(refresh);
+    const secure = process.env.NODE_ENV === 'production';
+    res
+      .cookie('access_token', accessToken, {
+        httpOnly: true,
+        secure,
+        sameSite: 'lax',
+        maxAge: 15 * 60 * 1000,
+      })
+      .cookie('refresh_token', refreshToken, {
+        httpOnly: true,
+        secure,
+        sameSite: 'lax',
+        maxAge: Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS ?? 7) * 24 * 3600 * 1000,
+      })
+      .json({ message: 'refreshed', user: { id: user.id, email: user.email, role: user.role } });
+  } catch (err) {
+    return res.status(401).json({ error: 'Refresh failed' });
+  }
+});
+
 // Request password reset
 router.post('/request-password-reset', body('email').isEmail().normalizeEmail(), async (req, res) => {
   const errors = validationResult(req);
@@ -168,7 +195,9 @@ router.post(
 );
 
 // Get current account
-router.get('/me', async (req, res) => {
+import { requireAuth } from '../services/auth';
+
+router.get('/me', requireAuth, async (req, res) => {
   const userId = (req as any).user?.id;
   if (!userId) return res.status(401).json({ error: 'Authentication required' });
   try {
