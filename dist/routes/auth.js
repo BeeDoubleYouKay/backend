@@ -67,6 +67,27 @@ router.post('/login', body('email').isEmail().normalizeEmail(), body('password')
     const { email, password } = req.body;
     try {
         const { user, accessToken, refreshToken } = await (0, auth_1.loginUser)(email, password);
+        // record login event and update auth state/stats (best-effort)
+        try {
+            const ip = req.headers['x-forwarded-for'] || req.ip || undefined;
+            const userAgent = req.headers['user-agent'] || undefined;
+            await prisma.$transaction([
+                prisma.userLoginEvent.create({ data: { userId: user.id, success: true, ip, userAgent } }),
+                prisma.userAuthState.upsert({
+                    where: { userId: user.id },
+                    create: { userId: user.id, lastLoginAt: new Date() },
+                    update: { lastLoginAt: new Date(), failedLoginAttempts: 0 },
+                }),
+                prisma.userStats.upsert({
+                    where: { userId: user.id },
+                    create: { userId: user.id, loginCount: 1, lastSeenAt: new Date() },
+                    update: { loginCount: { increment: 1 }, lastSeenAt: new Date() },
+                }),
+            ]);
+        }
+        catch (e) {
+            console.warn('DEBUG-LOGIN post-login bookkeeping failed:', e);
+        }
         // set cookies (HttpOnly, Secure when in prod)
         const secure = process.env.NODE_ENV === 'production';
         res
@@ -85,6 +106,26 @@ router.post('/login', body('email').isEmail().normalizeEmail(), body('password')
             .json({ message: 'Logged in', user: { id: user.id, email: user.email, role: user.role } });
     }
     catch (err) {
+        // On failure, record a failed login attempt if user exists (best-effort)
+        try {
+            const normalized = email.trim().toLowerCase();
+            const u = await prisma.user.findUnique({ where: { email: normalized } });
+            if (u) {
+                const ip = req.headers['x-forwarded-for'] || req.ip || undefined;
+                const userAgent = req.headers['user-agent'] || undefined;
+                await prisma.$transaction([
+                    prisma.userLoginEvent.create({ data: { userId: u.id, success: false, ip, userAgent } }),
+                    prisma.userAuthState.upsert({
+                        where: { userId: u.id },
+                        create: { userId: u.id, failedLoginAttempts: 1 },
+                        update: { failedLoginAttempts: { increment: 1 } },
+                    }),
+                ]);
+            }
+        }
+        catch (e) {
+            console.warn('DEBUG-LOGIN failed-attempt bookkeeping failed:', e);
+        }
         res.status(401).json({ error: 'Invalid credentials' });
     }
 });
@@ -100,6 +141,33 @@ router.post('/logout', async (req, res) => {
         }
     }
     res.clearCookie('access_token').clearCookie('refresh_token').json({ message: 'Logged out' });
+});
+// Refresh access token using refresh token cookie
+router.post('/refresh', async (req, res) => {
+    const refresh = req.cookies && req.cookies['refresh_token'];
+    if (!refresh)
+        return res.status(401).json({ error: 'No refresh token' });
+    try {
+        const { accessToken, refreshToken, user } = await (0, auth_1.refreshAccessToken)(refresh);
+        const secure = process.env.NODE_ENV === 'production';
+        res
+            .cookie('access_token', accessToken, {
+            httpOnly: true,
+            secure,
+            sameSite: 'lax',
+            maxAge: 15 * 60 * 1000,
+        })
+            .cookie('refresh_token', refreshToken, {
+            httpOnly: true,
+            secure,
+            sameSite: 'lax',
+            maxAge: Number(process.env.REFRESH_TOKEN_EXPIRES_DAYS ?? 7) * 24 * 3600 * 1000,
+        })
+            .json({ message: 'refreshed', user: { id: user.id, email: user.email, role: user.role } });
+    }
+    catch (err) {
+        return res.status(401).json({ error: 'Refresh failed' });
+    }
 });
 // Request password reset
 router.post('/request-password-reset', body('email').isEmail().normalizeEmail(), async (req, res) => {
@@ -137,7 +205,8 @@ router.post('/reset-password', body('token').isString().notEmpty(), body('passwo
     }
 });
 // Get current account
-router.get('/me', async (req, res) => {
+const auth_2 = require("../services/auth");
+router.get('/me', auth_2.requireAuth, async (req, res) => {
     const userId = req.user?.id;
     if (!userId)
         return res.status(401).json({ error: 'Authentication required' });

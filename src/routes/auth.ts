@@ -88,6 +88,27 @@ router.post(
     try {
       const { user, accessToken, refreshToken } = await loginUser(email, password);
 
+      // record login event and update auth state/stats (best-effort)
+      try {
+        const ip = (req.headers['x-forwarded-for'] as string) || req.ip || undefined;
+        const userAgent = (req.headers['user-agent'] as string) || undefined;
+        await prisma.$transaction([
+          prisma.userLoginEvent.create({ data: { userId: user.id, success: true, ip, userAgent } as any }),
+          prisma.userAuthState.upsert({
+            where: { userId: user.id },
+            create: { userId: user.id, lastLoginAt: new Date() },
+            update: { lastLoginAt: new Date(), failedLoginAttempts: 0 },
+          }),
+          prisma.userStats.upsert({
+            where: { userId: user.id },
+            create: { userId: user.id, loginCount: 1, lastSeenAt: new Date() },
+            update: { loginCount: { increment: 1 }, lastSeenAt: new Date() },
+          }),
+        ]);
+      } catch (e) {
+        console.warn('DEBUG-LOGIN post-login bookkeeping failed:', e);
+      }
+
       // set cookies (HttpOnly, Secure when in prod)
       const secure = process.env.NODE_ENV === 'production';
       res
@@ -105,6 +126,25 @@ router.post(
         })
         .json({ message: 'Logged in', user: { id: user.id, email: user.email, role: user.role } });
     } catch (err: any) {
+      // On failure, record a failed login attempt if user exists (best-effort)
+      try {
+        const normalized = (email as string).trim().toLowerCase();
+        const u = await prisma.user.findUnique({ where: { email: normalized } });
+        if (u) {
+          const ip = (req.headers['x-forwarded-for'] as string) || req.ip || undefined;
+          const userAgent = (req.headers['user-agent'] as string) || undefined;
+          await prisma.$transaction([
+            prisma.userLoginEvent.create({ data: { userId: u.id, success: false, ip, userAgent } as any }),
+            prisma.userAuthState.upsert({
+              where: { userId: u.id },
+              create: { userId: u.id, failedLoginAttempts: 1 },
+              update: { failedLoginAttempts: { increment: 1 } },
+            }),
+          ]);
+        }
+      } catch (e) {
+        console.warn('DEBUG-LOGIN failed-attempt bookkeeping failed:', e);
+      }
       res.status(401).json({ error: 'Invalid credentials' });
     }
   }

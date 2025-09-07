@@ -25,6 +25,49 @@ enum TokenType {
   REFRESH
 }
 
+// Additional enums for new user domain tables
+enum MfaType {
+  TOTP
+  SMS
+  WEBAUTHN
+}
+
+enum RiskTolerance {
+  CONSERVATIVE
+  MODERATE
+  AGGRESSIVE
+}
+
+enum InvestmentExperience {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+}
+
+enum ProfileVisibility {
+  PUBLIC
+  PRIVATE
+  FRIENDS_ONLY
+}
+
+enum ConsentType {
+  TOS
+  PRIVACY
+  DATA_PROCESSING
+}
+
+enum KycStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum ContactType {
+  PHONE
+  EMAIL
+  OTHER
+}
+
 // Defines the model for the 'Stock' table.
 model Stock {
   id          Int      @id @default(autoincrement())
@@ -49,13 +92,28 @@ model User {
   password        String
   name            String?
   isEmailVerified Boolean   @map("is_email_verified") @default(false)
+  emailVerifiedAt DateTime? @map("email_verified_at")
   role            Role      @default(USER)
   createdAt       DateTime  @map("created_at") @default(now())
   updatedAt       DateTime  @map("updated_at") @updatedAt
+  deletedAt       DateTime? @map("deleted_at")
   // relations
   refreshTokens   RefreshToken[]
   verificationTokens VerificationToken[]
   portfolios      Portfolio[]
+  profile         UserProfile?
+  authState       UserAuthState?
+  preferences     UserPreferences?
+  riskProfile     UserRiskProfile?
+  stats           UserStats?
+  mfaMethods      UserMfaMethod[]
+  mfaRecoveryCodes UserMfaRecoveryCode[]
+  suspensions     UserSuspension[]
+  loginEvents     UserLoginEvent[]
+  consents        UserConsent[]
+  contacts        ContactMethod[]
+  acquisitions    UserAcquisitionEvent[]
+  kyc             UserKyc?
 }
 
 // Refresh tokens (stored server-side so we can revoke)
@@ -111,4 +169,156 @@ model PortfolioHolding {
   @@unique([portfolioId, stockId])
   @@index([portfolioId])
   @@index([stockId])
+}
+
+// --- New user domain tables (see scripts/db-diaagram-codex.md) ---
+
+model UserProfile {
+  userId           Int       @id @map("user_id")
+  user             User      @relation(fields: [userId], references: [id])
+  firstName        String?   @map("first_name")
+  lastName         String?   @map("last_name")
+  displayName      String?   @map("display_name")
+  avatarUrl        String?   @map("avatar_url")
+  bio              String?
+  dateOfBirth      DateTime? @map("date_of_birth") @db.Date
+  timezone         String?
+  locale           String?
+  preferredCurrency String   @map("preferred_currency") @default("USD")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+}
+
+model UserRiskProfile {
+  userId               Int                  @id @map("user_id")
+  user                 User                 @relation(fields: [userId], references: [id])
+  riskTolerance        RiskTolerance?
+  investmentExperience InvestmentExperience?
+  annualIncomeRange    String?
+  goals                Json?
+  accreditedInvestor   Boolean              @default(false)
+  createdAt            DateTime             @default(now()) @map("created_at")
+  updatedAt            DateTime             @updatedAt @map("updated_at")
+}
+
+model UserPreferences {
+  userId           Int               @id @map("user_id")
+  user             User              @relation(fields: [userId], references: [id])
+  prefs            Json?
+  emailOptIn       Boolean           @default(true)  @map("email_opt_in")
+  marketingOptIn   Boolean           @default(false) @map("marketing_opt_in")
+  profileVisibility ProfileVisibility @default(PRIVATE) @map("profile_visibility")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+}
+
+model UserAuthState {
+  userId               Int       @id @map("user_id")
+  user                 User      @relation(fields: [userId], references: [id])
+  lastLoginAt          DateTime? @map("last_login_at")
+  failedLoginAttempts  Int       @default(0) @map("failed_login_attempts")
+  lockedUntil          DateTime? @map("locked_until")
+  twoFactorEnabled     Boolean   @default(false) @map("two_factor_enabled")
+  onboardingCompleted  Boolean   @default(false) @map("onboarding_completed")
+  onboardingStep       Int?      @map("onboarding_step")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+}
+
+model UserMfaMethod {
+  id          String   @id @default(uuid())
+  user        User     @relation(fields: [userId], references: [id])
+  userId      Int      @map("user_id")
+  type        MfaType
+  secretEnc   Bytes?   @map("secret_enc")
+  label       String?
+  enabledAt   DateTime @default(now()) @map("enabled_at")
+  disabledAt  DateTime? @map("disabled_at")
+  @@index([userId])
+}
+
+model UserMfaRecoveryCode {
+  id         String   @id @default(uuid())
+  user       User     @relation(fields: [userId], references: [id])
+  userId     Int      @map("user_id")
+  codeHash   String   @map("code_hash")
+  consumedAt DateTime? @map("consumed_at")
+  @@index([userId])
+}
+
+model UserSuspension {
+  id        String   @id @default(uuid())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    Int      @map("user_id")
+  reason    String?
+  startsAt  DateTime @default(now()) @map("starts_at")
+  endsAt    DateTime? @map("ends_at")
+  createdBy Int?     @map("created_by")
+  @@index([userId, startsAt, endsAt])
+}
+
+model UserLoginEvent {
+  id          BigInt   @id @default(autoincrement())
+  user        User     @relation(fields: [userId], references: [id])
+  userId      Int      @map("user_id")
+  occurredAt  DateTime @default(now()) @map("occurred_at")
+  success     Boolean
+  ip          String?  @map("ip")
+  userAgent   String?  @map("user_agent")
+  @@index([userId, occurredAt])
+}
+
+model UserConsent {
+  id          String      @id @default(uuid())
+  user        User        @relation(fields: [userId], references: [id])
+  userId      Int         @map("user_id")
+  consentType ConsentType @map("consent_type")
+  version     String?
+  acceptedAt  DateTime    @map("accepted_at")
+  revokedAt   DateTime?   @map("revoked_at")
+  @@index([userId, consentType])
+}
+
+model UserAcquisitionEvent {
+  id            BigInt   @id @default(autoincrement())
+  user          User     @relation(fields: [userId], references: [id])
+  userId        Int      @map("user_id")
+  occurredAt    DateTime @default(now()) @map("occurred_at")
+  referralSource String? @map("referral_source")
+  utmSource      String? @map("utm_source")
+  utmMedium      String? @map("utm_medium")
+  utmCampaign    String? @map("utm_campaign")
+  metadata       Json?
+  @@index([userId, occurredAt])
+}
+
+model ContactMethod {
+  id         String      @id @default(uuid())
+  user       User        @relation(fields: [userId], references: [id])
+  userId     Int         @map("user_id")
+  type       ContactType
+  value      String
+  verifiedAt DateTime?   @map("verified_at")
+  isPrimary  Boolean     @default(false) @map("primary")
+  @@index([userId])
+}
+
+model UserKyc {
+  userId       Int        @id @map("user_id")
+  user         User       @relation(fields: [userId], references: [id])
+  status       KycStatus?
+  provider     String?
+  referenceId  String?    @map("reference_id")
+  verifiedAt   DateTime?  @map("verified_at")
+  rejectedReason String?  @map("rejected_reason")
+  payloadEnc   Bytes?     @map("payload_enc")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+}
+
+model UserStats {
+  userId      Int      @id @map("user_id")
+  user        User     @relation(fields: [userId], references: [id])
+  loginCount  Int      @default(0) @map("login_count")
+  lastSeenAt  DateTime? @map("last_seen_at")
 }

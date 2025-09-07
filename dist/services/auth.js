@@ -80,6 +80,18 @@ async function registerUser(email, password, name) {
         console.error('DEBUG-REGISTER create user failed:', e && e.message ? e.message : e);
         throw e;
     }
+    // Initialize related user tables (best-effort, non-blocking)
+    try {
+        await prisma.$transaction([
+            prisma.userAuthState.create({ data: { userId: user.id } }),
+            prisma.userPreferences.create({ data: { userId: user.id } }),
+            prisma.userProfile.create({ data: { userId: user.id, displayName: name ?? null } }),
+            prisma.userStats.create({ data: { userId: user.id } }),
+        ]);
+    }
+    catch (e) {
+        console.warn('DEBUG-REGISTER init related tables failed:', e);
+    }
     const tokenRaw = randomTokenHex(32);
     const expiresAt = new Date(Date.now() + VERIFICATION_TOKEN_EXPIRES_HOURS * 3600 * 1000);
     try {
@@ -193,7 +205,7 @@ async function verifyEmailToken(tokenRaw) {
         throw new Error('Token expired');
     if (record.type !== client_1.TokenType.EMAIL_VERIFY)
         throw new Error('Invalid token type');
-    await prisma.user.update({ where: { id: record.userId }, data: { isEmailVerified: true } });
+    await prisma.user.update({ where: { id: record.userId }, data: { isEmailVerified: true, emailVerifiedAt: new Date() } });
     await prisma.verificationToken.update({ where: { id: record.id }, data: { used: true } });
     return true;
 }
@@ -223,6 +235,14 @@ async function requireAuth(req, res, next) {
     if (!user)
         return res.status(401).json({ error: 'User not found' });
     req.user = { id: user.id, role: user.role, email: user.email };
+    // Best-effort: update lastSeenAt asynchronously
+    prisma.userStats
+        .upsert({
+        where: { userId: user.id },
+        create: { userId: user.id, lastSeenAt: new Date() },
+        update: { lastSeenAt: new Date() },
+    })
+        .catch(() => { });
     next();
 }
 function requireRole(role) {
