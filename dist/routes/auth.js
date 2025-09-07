@@ -67,26 +67,14 @@ router.post('/login', body('email').isEmail().normalizeEmail(), body('password')
     const { email, password } = req.body;
     try {
         const { user, accessToken, refreshToken } = await (0, auth_1.loginUser)(email, password);
-        // record login event and update auth state/stats (best-effort)
+        // record login event (best-effort); auth state/stats handled in service
         try {
             const ip = req.headers['x-forwarded-for'] || req.ip || undefined;
             const userAgent = req.headers['user-agent'] || undefined;
-            await prisma.$transaction([
-                prisma.userLoginEvent.create({ data: { userId: user.id, success: true, ip, userAgent } }),
-                prisma.userAuthState.upsert({
-                    where: { userId: user.id },
-                    create: { userId: user.id, lastLoginAt: new Date() },
-                    update: { lastLoginAt: new Date(), failedLoginAttempts: 0 },
-                }),
-                prisma.userStats.upsert({
-                    where: { userId: user.id },
-                    create: { userId: user.id, loginCount: 1, lastSeenAt: new Date() },
-                    update: { loginCount: { increment: 1 }, lastSeenAt: new Date() },
-                }),
-            ]);
+            await prisma.userLoginEvent.create({ data: { userId: user.id, success: true, ip, userAgent } });
         }
         catch (e) {
-            console.warn('DEBUG-LOGIN post-login bookkeeping failed:', e);
+            console.warn('DEBUG-LOGIN post-login event failed:', e);
         }
         // set cookies (HttpOnly, Secure when in prod)
         const secure = process.env.NODE_ENV === 'production';
@@ -106,27 +94,20 @@ router.post('/login', body('email').isEmail().normalizeEmail(), body('password')
             .json({ message: 'Logged in', user: { id: user.id, email: user.email, role: user.role } });
     }
     catch (err) {
-        // On failure, record a failed login attempt if user exists (best-effort)
         try {
             const normalized = email.trim().toLowerCase();
             const u = await prisma.user.findUnique({ where: { email: normalized } });
             if (u) {
                 const ip = req.headers['x-forwarded-for'] || req.ip || undefined;
                 const userAgent = req.headers['user-agent'] || undefined;
-                await prisma.$transaction([
-                    prisma.userLoginEvent.create({ data: { userId: u.id, success: false, ip, userAgent } }),
-                    prisma.userAuthState.upsert({
-                        where: { userId: u.id },
-                        create: { userId: u.id, failedLoginAttempts: 1 },
-                        update: { failedLoginAttempts: { increment: 1 } },
-                    }),
-                ]);
+                await prisma.userLoginEvent.create({ data: { userId: u.id, success: false, ip, userAgent } });
             }
         }
         catch (e) {
-            console.warn('DEBUG-LOGIN failed-attempt bookkeeping failed:', e);
+            console.warn('DEBUG-LOGIN failed-attempt event failed:', e);
         }
-        res.status(401).json({ error: 'Invalid credentials' });
+        const msg = (err && typeof err.message === 'string') ? err.message : 'Invalid credentials';
+        res.status(401).json({ error: msg });
     }
 });
 // Logout
@@ -211,14 +192,108 @@ router.get('/me', auth_2.requireAuth, async (req, res) => {
     if (!userId)
         return res.status(401).json({ error: 'Authentication required' });
     try {
-        const user = await prisma.user.findUnique({ where: { id: userId } });
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            include: { profile: true, preferences: true },
+        });
         if (!user)
             return res.status(404).json({ error: 'User not found' });
-        res.json({ id: user.id, email: user.email, name: user.name, role: user.role, isEmailVerified: user.isEmailVerified });
+        res.json({
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+            isEmailVerified: user.isEmailVerified,
+            emailVerifiedAt: user.emailVerifiedAt ?? null,
+            profile: user.profile
+                ? {
+                    firstName: user.profile.firstName,
+                    lastName: user.profile.lastName,
+                    displayName: user.profile.displayName,
+                    avatarUrl: user.profile.avatarUrl,
+                    bio: user.profile.bio,
+                    dateOfBirth: user.profile.dateOfBirth,
+                    timezone: user.profile.timezone,
+                    locale: user.profile.locale,
+                    preferredCurrency: user.profile.preferredCurrency,
+                }
+                : null,
+            preferences: user.preferences
+                ? {
+                    emailOptIn: user.preferences.emailOptIn,
+                    marketingOptIn: user.preferences.marketingOptIn,
+                    profileVisibility: user.preferences.profileVisibility,
+                    prefs: user.preferences.prefs,
+                }
+                : null,
+        });
     }
     catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Failed to fetch user' });
+    }
+});
+// Update current profile/preferences
+router.patch('/me/profile', auth_2.requireAuth, body('firstName').optional().isString().isLength({ max: 100 }).trim(), body('lastName').optional().isString().isLength({ max: 100 }).trim(), body('displayName').optional().isString().isLength({ max: 100 }).trim(), body('avatarUrl').optional().isString().isLength({ max: 1024 }).trim(), body('bio').optional().isString().isLength({ max: 2000 }).trim(), body('dateOfBirth').optional().isISO8601().toDate(), body('timezone').optional().isString().isLength({ max: 100 }).trim(), body('locale').optional().isString().isLength({ max: 10 }).trim(), body('preferredCurrency').optional().isString().isLength({ max: 10 }).trim(), body('emailOptIn').optional().isBoolean().toBoolean(), body('marketingOptIn').optional().isBoolean().toBoolean(), body('profileVisibility').optional().isIn(['PUBLIC', 'PRIVATE', 'FRIENDS_ONLY']), async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty())
+        return res.status(400).json({ errors: errors.array() });
+    const userId = req.user?.id;
+    if (!userId)
+        return res.status(401).json({ error: 'Authentication required' });
+    const { firstName, lastName, displayName, avatarUrl, bio, dateOfBirth, timezone, locale, preferredCurrency, emailOptIn, marketingOptIn, profileVisibility, } = req.body;
+    try {
+        const profileData = {
+            ...(firstName !== undefined ? { firstName } : {}),
+            ...(lastName !== undefined ? { lastName } : {}),
+            ...(displayName !== undefined ? { displayName } : {}),
+            ...(avatarUrl !== undefined ? { avatarUrl } : {}),
+            ...(bio !== undefined ? { bio } : {}),
+            ...(dateOfBirth !== undefined ? { dateOfBirth } : {}),
+            ...(timezone !== undefined ? { timezone } : {}),
+            ...(locale !== undefined ? { locale } : {}),
+            ...(preferredCurrency !== undefined ? { preferredCurrency } : {}),
+        };
+        const prefsData = {
+            ...(emailOptIn !== undefined ? { emailOptIn } : {}),
+            ...(marketingOptIn !== undefined ? { marketingOptIn } : {}),
+            ...(profileVisibility !== undefined ? { profileVisibility } : {}),
+        };
+        const [profile, preferences] = await prisma.$transaction([
+            prisma.userProfile.upsert({
+                where: { userId },
+                create: { userId, ...profileData },
+                update: profileData,
+            }),
+            prisma.userPreferences.upsert({
+                where: { userId },
+                create: { userId, ...prefsData },
+                update: prefsData,
+            }),
+        ]);
+        res.json({
+            profile: {
+                firstName: profile.firstName,
+                lastName: profile.lastName,
+                displayName: profile.displayName,
+                avatarUrl: profile.avatarUrl,
+                bio: profile.bio,
+                dateOfBirth: profile.dateOfBirth,
+                timezone: profile.timezone,
+                locale: profile.locale,
+                preferredCurrency: profile.preferredCurrency,
+            },
+            preferences: {
+                emailOptIn: preferences.emailOptIn,
+                marketingOptIn: preferences.marketingOptIn,
+                profileVisibility: preferences.profileVisibility,
+                prefs: preferences.prefs,
+            },
+        });
+    }
+    catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Failed to update profile' });
     }
 });
 exports.default = router;
