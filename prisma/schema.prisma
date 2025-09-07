@@ -182,6 +182,7 @@ model UserProfile {
   avatarUrl        String?   @map("avatar_url")
   bio              String?
   dateOfBirth      DateTime? @map("date_of_birth") @db.Date
+  countryCode      String?   @map("country_code")
   timezone         String?
   locale           String?
   preferredCurrency String   @map("preferred_currency") @default("USD")

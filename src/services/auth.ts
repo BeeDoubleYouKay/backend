@@ -47,7 +47,18 @@ export function verifyAccessToken(token: string) {
 
 // --- High-level auth operations ---
 
-export async function registerUser(email: string, password: string, name?: string) {
+type ExtraRegistration = {
+  firstName: string;
+  lastName: string;
+  preferredName?: string;
+  dateOfBirth: Date | string; // route coerces to Date
+  country: string;
+  timezone?: string;
+  preferredCurrency?: string;
+  marketingOptIn?: boolean; // default true
+};
+
+export async function registerUser(email: string, password: string, name?: string, extra?: ExtraRegistration) {
   const normalized = email.trim().toLowerCase();
   console.log('DEBUG-REGISTER normalized:', normalized);
   const existing = await prisma.user.findUnique({ where: { email: normalized } });
@@ -72,10 +83,22 @@ export async function registerUser(email: string, password: string, name?: strin
 
   // Initialize related user tables (best-effort, non-blocking)
   try {
+    const dob = extra?.dateOfBirth ? new Date(extra.dateOfBirth as any) : null;
     await prisma.$transaction([
       prisma.userAuthState.create({ data: { userId: user.id } }),
-      prisma.userPreferences.create({ data: { userId: user.id } }),
-      prisma.userProfile.create({ data: { userId: user.id, displayName: name ?? null } }),
+      prisma.userPreferences.create({ data: { userId: user.id, marketingOptIn: extra?.marketingOptIn ?? true } }),
+      prisma.userProfile.create({
+        data: {
+          userId: user.id,
+          displayName: extra?.preferredName ?? name ?? null,
+          firstName: extra?.firstName ?? null,
+          lastName: extra?.lastName ?? null,
+          dateOfBirth: dob,
+          countryCode: extra?.country ?? null,
+          timezone: extra?.timezone ?? null,
+          preferredCurrency: extra?.preferredCurrency ?? undefined,
+        },
+      }),
       prisma.userStats.create({ data: { userId: user.id } }),
     ]);
   } catch (e) {
