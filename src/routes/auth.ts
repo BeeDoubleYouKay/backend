@@ -287,7 +287,8 @@ router.patch(
   body('displayName').optional().isString().isLength({ max: 100 }).trim(),
   body('avatarUrl').optional().isString().isLength({ max: 1024 }).trim(),
   body('bio').optional().isString().isLength({ max: 2000 }).trim(),
-  body('dateOfBirth').optional().isISO8601().toDate(),
+  // dateOfBirth is immutable after registration; ignore attempts to change it
+  // body('dateOfBirth') intentionally omitted from validators
   body('timezone').optional().isString().isLength({ max: 100 }).trim(),
   body('locale').optional().isString().isLength({ max: 10 }).trim(),
   body('preferredCurrency').optional().isString().isLength({ max: 10 }).trim(),
@@ -306,7 +307,7 @@ router.patch(
       displayName,
       avatarUrl,
       bio,
-      dateOfBirth,
+      // dateOfBirth is read-only; do not destructure
       timezone,
       locale,
       preferredCurrency,
@@ -322,7 +323,7 @@ router.patch(
         ...(displayName !== undefined ? { displayName } : {}),
         ...(avatarUrl !== undefined ? { avatarUrl } : {}),
         ...(bio !== undefined ? { bio } : {}),
-        ...(dateOfBirth !== undefined ? { dateOfBirth } : {}),
+        // dateOfBirth updates are ignored server-side
         ...(timezone !== undefined ? { timezone } : {}),
         ...(locale !== undefined ? { locale } : {}),
         ...(preferredCurrency !== undefined ? { preferredCurrency } : {}),
