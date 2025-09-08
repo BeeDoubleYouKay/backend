@@ -174,6 +174,11 @@ export async function loginUser(email: string, password: string) {
     throw new Error('Invalid credentials');
   }
 
+  // Block login if email not verified
+  if (!user.isEmailVerified) {
+    throw new Error('Please verify your email before logging in.');
+  }
+
   // Successful login: reset counters, update stats
   await prisma.$transaction([
     prisma.userAuthState.update({
@@ -210,6 +215,11 @@ export async function refreshAccessToken(refreshRaw: string) {
 
   const user = await prisma.user.findUnique({ where: { id: dbToken.userId } });
   if (!user) throw new Error('User not found');
+
+  // Prevent refreshing tokens for unverified accounts
+  if (!user.isEmailVerified) {
+    throw new Error('Email not verified');
+  }
 
   // Optionally rotate: revoke old DB token and create a new one
   await prisma.refreshToken.update({
