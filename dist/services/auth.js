@@ -57,8 +57,7 @@ function verifyAccessToken(token) {
         return null;
     }
 }
-// --- High-level auth operations ---
-async function registerUser(email, password, name) {
+async function registerUser(email, password, name, extra) {
     const normalized = email.trim().toLowerCase();
     console.log('DEBUG-REGISTER normalized:', normalized);
     const existing = await prisma.user.findUnique({ where: { email: normalized } });
@@ -82,10 +81,22 @@ async function registerUser(email, password, name) {
     }
     // Initialize related user tables (best-effort, non-blocking)
     try {
+        const dob = extra?.dateOfBirth ? new Date(extra.dateOfBirth) : null;
         await prisma.$transaction([
             prisma.userAuthState.create({ data: { userId: user.id } }),
-            prisma.userPreferences.create({ data: { userId: user.id } }),
-            prisma.userProfile.create({ data: { userId: user.id, displayName: name ?? null } }),
+            prisma.userPreferences.create({ data: { userId: user.id, marketingOptIn: extra?.marketingOptIn ?? true } }),
+            prisma.userProfile.create({
+                data: {
+                    userId: user.id,
+                    displayName: extra?.preferredName ?? name ?? null,
+                    firstName: extra?.firstName ?? null,
+                    lastName: extra?.lastName ?? null,
+                    dateOfBirth: dob,
+                    countryCode: extra?.country ?? null,
+                    timezone: extra?.timezone ?? null,
+                    preferredCurrency: extra?.preferredCurrency ?? undefined,
+                },
+            }),
             prisma.userStats.create({ data: { userId: user.id } }),
         ]);
     }
@@ -153,6 +164,10 @@ async function loginUser(email, password) {
         });
         throw new Error('Invalid credentials');
     }
+    // Block login if email not verified
+    if (!user.isEmailVerified) {
+        throw new Error('Please verify your email before logging in.');
+    }
     // Successful login: reset counters, update stats
     await prisma.$transaction([
         prisma.userAuthState.update({
@@ -186,6 +201,10 @@ async function refreshAccessToken(refreshRaw) {
     const user = await prisma.user.findUnique({ where: { id: dbToken.userId } });
     if (!user)
         throw new Error('User not found');
+    // Prevent refreshing tokens for unverified accounts
+    if (!user.isEmailVerified) {
+        throw new Error('Email not verified');
+    }
     // Optionally rotate: revoke old DB token and create a new one
     await prisma.refreshToken.update({
         where: { id: dbToken.id },

@@ -41,6 +41,7 @@ router.get('/holdings', requireAuth, async (req, res) => {
           s.description AS description,
           s.sector AS sector,
           s.industry AS industry,
+          s.country AS country,
           s.exchange AS exchange,
           ph.quantity AS quantity,
           ph.average_cost_price AS "averageCostPrice"
@@ -59,6 +60,7 @@ router.get('/holdings', requireAuth, async (req, res) => {
       description: r.description ?? null,
       sector: r.sector ?? null,
       industry: r.industry ?? null,
+      country: r.country ?? null,
       exchange: r.exchange ?? null,
       quantity: Number(r.quantity ?? 0),
       averageCostPrice: Number(r.averageCostPrice ?? 0),
@@ -140,4 +142,3 @@ router.delete('/holdings/:stockId', requireAuth, async (req, res) => {
 });
 
 export default router;
-
