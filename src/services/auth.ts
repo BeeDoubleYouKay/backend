@@ -47,7 +47,18 @@ export function verifyAccessToken(token: string) {
 
 // --- High-level auth operations ---
 
-export async function registerUser(email: string, password: string, name?: string) {
+type ExtraRegistration = {
+  firstName: string;
+  lastName: string;
+  preferredName?: string;
+  dateOfBirth: Date | string; // route coerces to Date
+  country: string;
+  timezone?: string;
+  preferredCurrency?: string;
+  marketingOptIn?: boolean; // default true
+};
+
+export async function registerUser(email: string, password: string, name?: string, extra?: ExtraRegistration) {
   const normalized = email.trim().toLowerCase();
   console.log('DEBUG-REGISTER normalized:', normalized);
   const existing = await prisma.user.findUnique({ where: { email: normalized } });
@@ -68,6 +79,30 @@ export async function registerUser(email: string, password: string, name?: strin
   } catch (e: any) {
     console.error('DEBUG-REGISTER create user failed:', e && e.message ? e.message : e);
     throw e;
+  }
+
+  // Initialize related user tables (best-effort, non-blocking)
+  try {
+    const dob = extra?.dateOfBirth ? new Date(extra.dateOfBirth as any) : null;
+    await prisma.$transaction([
+      prisma.userAuthState.create({ data: { userId: user.id } }),
+      prisma.userPreferences.create({ data: { userId: user.id, marketingOptIn: extra?.marketingOptIn ?? true } }),
+      prisma.userProfile.create({
+        data: {
+          userId: user.id,
+          displayName: extra?.preferredName ?? name ?? null,
+          firstName: extra?.firstName ?? null,
+          lastName: extra?.lastName ?? null,
+          dateOfBirth: dob,
+          countryCode: extra?.country ?? null,
+          timezone: extra?.timezone ?? null,
+          preferredCurrency: extra?.preferredCurrency ?? undefined,
+        },
+      }),
+      prisma.userStats.create({ data: { userId: user.id } }),
+    ]);
+  } catch (e) {
+    console.warn('DEBUG-REGISTER init related tables failed:', e);
   }
 
   const tokenRaw = randomTokenHex(32);
@@ -111,8 +146,51 @@ export async function loginUser(email: string, password: string) {
   const user = await prisma.user.findUnique({ where: { email: normalized } });
   if (!user) throw new Error('Invalid credentials');
 
+  // Ensure auth state row exists and check for active lock
+  const now = new Date();
+  let state = await prisma.userAuthState.findUnique({ where: { userId: user.id } });
+  if (!state) {
+    state = await prisma.userAuthState.create({ data: { userId: user.id } });
+  }
+  if (state.lockedUntil && state.lockedUntil > now) {
+    throw new Error('Account temporarily locked. Try again later.');
+  }
+
   const ok = await verifyPassword(password, user.password);
-  if (!ok) throw new Error('Invalid credentials');
+  if (!ok) {
+    // Increment failed attempts and lock if threshold reached
+    const MAX_FAILED = Number(process.env.AUTH_MAX_FAILED ?? 5);
+    const LOCK_MINUTES = Number(process.env.AUTH_LOCK_MINUTES ?? 15);
+    const nextFails = (state.failedLoginAttempts ?? 0) + 1;
+    const lockedUntil = nextFails >= MAX_FAILED ? new Date(now.getTime() + LOCK_MINUTES * 60 * 1000) : null;
+
+    await prisma.userAuthState.update({
+      where: { userId: user.id },
+      data: {
+        failedLoginAttempts: nextFails,
+        lockedUntil: lockedUntil ?? undefined,
+      },
+    });
+    throw new Error('Invalid credentials');
+  }
+
+  // Block login if email not verified
+  if (!user.isEmailVerified) {
+    throw new Error('Please verify your email before logging in.');
+  }
+
+  // Successful login: reset counters, update stats
+  await prisma.$transaction([
+    prisma.userAuthState.update({
+      where: { userId: user.id },
+      data: { lastLoginAt: now, failedLoginAttempts: 0, lockedUntil: null },
+    }),
+    prisma.userStats.upsert({
+      where: { userId: user.id },
+      create: { userId: user.id, loginCount: 1, lastSeenAt: now },
+      update: { loginCount: { increment: 1 }, lastSeenAt: now },
+    }),
+  ]);
 
   const accessToken = signAccessToken({ sub: user.id, role: user.role });
   const { raw: refreshRaw } = await createRefreshTokenForUser(user.id);
@@ -137,6 +215,11 @@ export async function refreshAccessToken(refreshRaw: string) {
 
   const user = await prisma.user.findUnique({ where: { id: dbToken.userId } });
   if (!user) throw new Error('User not found');
+
+  // Prevent refreshing tokens for unverified accounts
+  if (!user.isEmailVerified) {
+    throw new Error('Email not verified');
+  }
 
   // Optionally rotate: revoke old DB token and create a new one
   await prisma.refreshToken.update({
@@ -194,7 +277,7 @@ export async function verifyEmailToken(tokenRaw: string) {
   if (record.expiresAt < new Date()) throw new Error('Token expired');
   if (record.type !== TokenType.EMAIL_VERIFY) throw new Error('Invalid token type');
 
-  await prisma.user.update({ where: { id: record.userId }, data: { isEmailVerified: true } });
+  await prisma.user.update({ where: { id: record.userId }, data: { isEmailVerified: true, emailVerifiedAt: new Date() } });
   await prisma.verificationToken.update({ where: { id: record.id }, data: { used: true } });
 
   return true;
@@ -226,6 +309,14 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   if (!user) return res.status(401).json({ error: 'User not found' });
 
   (req as any).user = { id: user.id, role: user.role, email: user.email };
+  // Best-effort: update lastSeenAt asynchronously
+  prisma.userStats
+    .upsert({
+      where: { userId: user.id },
+      create: { userId: user.id, lastSeenAt: new Date() },
+      update: { lastSeenAt: new Date() },
+    })
+    .catch(() => {});
   next();
 }
 

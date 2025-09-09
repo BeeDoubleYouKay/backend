@@ -21,7 +21,14 @@ router.post(
   '/register',
   body('email').isEmail().normalizeEmail(),
   body('password').isLength({ min: 8 }),
-  body('name').optional().isString().trim().isLength({ max: 100 }),
+  body('firstName').isString().trim().notEmpty(),
+  body('lastName').isString().trim().notEmpty(),
+  body('preferredName').optional().isString().trim().isLength({ max: 100 }),
+  body('dateOfBirth').isISO8601().toDate(),
+  body('country').isString().trim().notEmpty(),
+  body('timezone').optional().isString().trim(),
+  body('preferredCurrency').optional().isString().trim(),
+  body('marketingOptIn').optional().isBoolean().toBoolean(),
   async (req, res) => {
     // DEBUG-AUTH-REG: log incoming headers/body to diagnose validation failures (debug-only)
     try {
@@ -38,9 +45,18 @@ router.post(
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
  
-    const { email, password, name } = req.body;
+    const { email, password } = req.body;
     try {
-      const { user, verificationToken } = await registerUser(email, password, name);
+      const { user, verificationToken } = await registerUser(email, password, undefined, {
+        firstName: req.body.firstName,
+        lastName: req.body.lastName,
+        preferredName: req.body.preferredName,
+        dateOfBirth: req.body.dateOfBirth, // Date object via toDate()
+        country: req.body.country,
+        timezone: req.body.timezone,
+        preferredCurrency: req.body.preferredCurrency,
+        marketingOptIn: typeof req.body.marketingOptIn === 'boolean' ? req.body.marketingOptIn : true,
+      });
 
       // send verification email (best-effort)
       const base = process.env.APP_BASE_URL ?? `http://localhost:${process.env.PORT || 3000}`;
@@ -88,6 +104,15 @@ router.post(
     try {
       const { user, accessToken, refreshToken } = await loginUser(email, password);
 
+      // record login event (best-effort); auth state/stats handled in service
+      try {
+        const ip = (req.headers['x-forwarded-for'] as string) || req.ip || undefined;
+        const userAgent = (req.headers['user-agent'] as string) || undefined;
+        await prisma.userLoginEvent.create({ data: { userId: user.id, success: true, ip, userAgent } as any });
+      } catch (e) {
+        console.warn('DEBUG-LOGIN post-login event failed:', e);
+      }
+
       // set cookies (HttpOnly, Secure when in prod)
       const secure = process.env.NODE_ENV === 'production';
       res
@@ -105,7 +130,19 @@ router.post(
         })
         .json({ message: 'Logged in', user: { id: user.id, email: user.email, role: user.role } });
     } catch (err: any) {
-      res.status(401).json({ error: 'Invalid credentials' });
+      try {
+        const normalized = (email as string).trim().toLowerCase();
+        const u = await prisma.user.findUnique({ where: { email: normalized } });
+        if (u) {
+          const ip = (req.headers['x-forwarded-for'] as string) || req.ip || undefined;
+          const userAgent = (req.headers['user-agent'] as string) || undefined;
+          await prisma.userLoginEvent.create({ data: { userId: u.id, success: false, ip, userAgent } as any });
+        }
+      } catch (e) {
+        console.warn('DEBUG-LOGIN failed-attempt event failed:', e);
+      }
+      const msg = (err && typeof err.message === 'string') ? err.message : 'Invalid credentials';
+      res.status(401).json({ error: msg });
     }
   }
 );
@@ -201,13 +238,139 @@ router.get('/me', requireAuth, async (req, res) => {
   const userId = (req as any).user?.id;
   if (!userId) return res.status(401).json({ error: 'Authentication required' });
   try {
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { profile: true, preferences: true },
+    });
     if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ id: user.id, email: user.email, name: user.name, role: user.role, isEmailVerified: user.isEmailVerified });
+    res.json({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      isEmailVerified: user.isEmailVerified,
+      emailVerifiedAt: (user as any).emailVerifiedAt ?? null,
+      profile: user.profile
+        ? {
+            firstName: user.profile.firstName,
+            lastName: user.profile.lastName,
+            displayName: user.profile.displayName,
+            avatarUrl: user.profile.avatarUrl,
+            bio: user.profile.bio,
+            dateOfBirth: user.profile.dateOfBirth,
+            timezone: user.profile.timezone,
+            locale: user.profile.locale,
+            preferredCurrency: user.profile.preferredCurrency,
+          }
+        : null,
+      preferences: user.preferences
+        ? {
+            emailOptIn: user.preferences.emailOptIn,
+            marketingOptIn: user.preferences.marketingOptIn,
+            profileVisibility: user.preferences.profileVisibility,
+            prefs: user.preferences.prefs,
+          }
+        : null,
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to fetch user' });
   }
 });
+
+// Update current profile/preferences
+router.patch(
+  '/me/profile',
+  requireAuth,
+  body('firstName').optional().isString().isLength({ max: 100 }).trim(),
+  body('lastName').optional().isString().isLength({ max: 100 }).trim(),
+  body('displayName').optional().isString().isLength({ max: 100 }).trim(),
+  body('avatarUrl').optional().isString().isLength({ max: 1024 }).trim(),
+  body('bio').optional().isString().isLength({ max: 2000 }).trim(),
+  // dateOfBirth is immutable after registration; ignore attempts to change it
+  // body('dateOfBirth') intentionally omitted from validators
+  body('timezone').optional().isString().isLength({ max: 100 }).trim(),
+  body('locale').optional().isString().isLength({ max: 10 }).trim(),
+  body('preferredCurrency').optional().isString().isLength({ max: 10 }).trim(),
+  body('emailOptIn').optional().isBoolean().toBoolean(),
+  body('marketingOptIn').optional().isBoolean().toBoolean(),
+  body('profileVisibility').optional().isIn(['PUBLIC','PRIVATE','FRIENDS_ONLY']),
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
+    const userId = (req as any).user?.id;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+    const {
+      firstName,
+      lastName,
+      displayName,
+      avatarUrl,
+      bio,
+      // dateOfBirth is read-only; do not destructure
+      timezone,
+      locale,
+      preferredCurrency,
+      emailOptIn,
+      marketingOptIn,
+      profileVisibility,
+    } = req.body;
+
+    try {
+      const profileData: any = {
+        ...(firstName !== undefined ? { firstName } : {}),
+        ...(lastName !== undefined ? { lastName } : {}),
+        ...(displayName !== undefined ? { displayName } : {}),
+        ...(avatarUrl !== undefined ? { avatarUrl } : {}),
+        ...(bio !== undefined ? { bio } : {}),
+        // dateOfBirth updates are ignored server-side
+        ...(timezone !== undefined ? { timezone } : {}),
+        ...(locale !== undefined ? { locale } : {}),
+        ...(preferredCurrency !== undefined ? { preferredCurrency } : {}),
+      };
+      const prefsData: any = {
+        ...(emailOptIn !== undefined ? { emailOptIn } : {}),
+        ...(marketingOptIn !== undefined ? { marketingOptIn } : {}),
+        ...(profileVisibility !== undefined ? { profileVisibility } : {}),
+      };
+
+      const [profile, preferences] = await prisma.$transaction([
+        prisma.userProfile.upsert({
+          where: { userId },
+          create: { userId, ...profileData },
+          update: profileData,
+        }),
+        prisma.userPreferences.upsert({
+          where: { userId },
+          create: { userId, ...prefsData },
+          update: prefsData,
+        }),
+      ]);
+
+      res.json({
+        profile: {
+          firstName: profile.firstName,
+          lastName: profile.lastName,
+          displayName: profile.displayName,
+          avatarUrl: profile.avatarUrl,
+          bio: profile.bio,
+          dateOfBirth: profile.dateOfBirth,
+          timezone: profile.timezone,
+          locale: profile.locale,
+          preferredCurrency: profile.preferredCurrency,
+        },
+        preferences: {
+          emailOptIn: preferences.emailOptIn,
+          marketingOptIn: preferences.marketingOptIn,
+          profileVisibility: preferences.profileVisibility,
+          prefs: preferences.prefs,
+        },
+      });
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ error: 'Failed to update profile' });
+    }
+  }
+);
 
 export default router;

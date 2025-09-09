@@ -80,6 +80,18 @@ async function registerUser(email, password, name) {
         console.error('DEBUG-REGISTER create user failed:', e && e.message ? e.message : e);
         throw e;
     }
+    // Initialize related user tables (best-effort, non-blocking)
+    try {
+        await prisma.$transaction([
+            prisma.userAuthState.create({ data: { userId: user.id } }),
+            prisma.userPreferences.create({ data: { userId: user.id } }),
+            prisma.userProfile.create({ data: { userId: user.id, displayName: name ?? null } }),
+            prisma.userStats.create({ data: { userId: user.id } }),
+        ]);
+    }
+    catch (e) {
+        console.warn('DEBUG-REGISTER init related tables failed:', e);
+    }
     const tokenRaw = randomTokenHex(32);
     const expiresAt = new Date(Date.now() + VERIFICATION_TOKEN_EXPIRES_HOURS * 3600 * 1000);
     try {
@@ -116,9 +128,43 @@ async function loginUser(email, password) {
     const user = await prisma.user.findUnique({ where: { email: normalized } });
     if (!user)
         throw new Error('Invalid credentials');
+    // Ensure auth state row exists and check for active lock
+    const now = new Date();
+    let state = await prisma.userAuthState.findUnique({ where: { userId: user.id } });
+    if (!state) {
+        state = await prisma.userAuthState.create({ data: { userId: user.id } });
+    }
+    if (state.lockedUntil && state.lockedUntil > now) {
+        throw new Error('Account temporarily locked. Try again later.');
+    }
     const ok = await verifyPassword(password, user.password);
-    if (!ok)
+    if (!ok) {
+        // Increment failed attempts and lock if threshold reached
+        const MAX_FAILED = Number(process.env.AUTH_MAX_FAILED ?? 5);
+        const LOCK_MINUTES = Number(process.env.AUTH_LOCK_MINUTES ?? 15);
+        const nextFails = (state.failedLoginAttempts ?? 0) + 1;
+        const lockedUntil = nextFails >= MAX_FAILED ? new Date(now.getTime() + LOCK_MINUTES * 60 * 1000) : null;
+        await prisma.userAuthState.update({
+            where: { userId: user.id },
+            data: {
+                failedLoginAttempts: nextFails,
+                lockedUntil: lockedUntil ?? undefined,
+            },
+        });
         throw new Error('Invalid credentials');
+    }
+    // Successful login: reset counters, update stats
+    await prisma.$transaction([
+        prisma.userAuthState.update({
+            where: { userId: user.id },
+            data: { lastLoginAt: now, failedLoginAttempts: 0, lockedUntil: null },
+        }),
+        prisma.userStats.upsert({
+            where: { userId: user.id },
+            create: { userId: user.id, loginCount: 1, lastSeenAt: now },
+            update: { loginCount: { increment: 1 }, lastSeenAt: now },
+        }),
+    ]);
     const accessToken = signAccessToken({ sub: user.id, role: user.role });
     const { raw: refreshRaw } = await createRefreshTokenForUser(user.id);
     return { user, accessToken, refreshToken: refreshRaw };
@@ -193,7 +239,7 @@ async function verifyEmailToken(tokenRaw) {
         throw new Error('Token expired');
     if (record.type !== client_1.TokenType.EMAIL_VERIFY)
         throw new Error('Invalid token type');
-    await prisma.user.update({ where: { id: record.userId }, data: { isEmailVerified: true } });
+    await prisma.user.update({ where: { id: record.userId }, data: { isEmailVerified: true, emailVerifiedAt: new Date() } });
     await prisma.verificationToken.update({ where: { id: record.id }, data: { used: true } });
     return true;
 }
@@ -223,6 +269,14 @@ async function requireAuth(req, res, next) {
     if (!user)
         return res.status(401).json({ error: 'User not found' });
     req.user = { id: user.id, role: user.role, email: user.email };
+    // Best-effort: update lastSeenAt asynchronously
+    prisma.userStats
+        .upsert({
+        where: { userId: user.id },
+        create: { userId: user.id, lastSeenAt: new Date() },
+        update: { lastSeenAt: new Date() },
+    })
+        .catch(() => { });
     next();
 }
 function requireRole(role) {
