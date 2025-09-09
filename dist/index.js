@@ -71,6 +71,7 @@ exports.app.get('/stocks/search', async (req, res) => {
         const results = await prisma.$queryRawUnsafe(`
       SELECT
         id, ticker, close, description, sector, exchange, industry,
+        market_cap AS "marketCap",
         -- Rank: 2 = exact match, 1 = startswith, 0 = fuzzy
         CASE
           WHEN LOWER(ticker) = LOWER($1) OR LOWER(symbol) = LOWER($1) THEN 2
@@ -99,7 +100,8 @@ exports.app.get('/stocks/search', async (req, res) => {
             description: r.description,
             sector: r.sector ?? null,
             exchange: r.exchange,
-            industry: r.industry ?? null
+            industry: r.industry ?? null,
+            marketCap: r.marketCap != null ? Number(r.marketCap) : null
         }));
         stockSearchCache.set(cacheKey, stocks);
         res.json(stocks);

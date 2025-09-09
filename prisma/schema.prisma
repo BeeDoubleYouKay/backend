@@ -83,6 +83,8 @@ model Stock {
   country     String?
   currency    String
   industry    String?
+  // Total market capitalization in the listing currency
+  marketCap   Float?   @map("market_cap")
 }
 
 // Users table for authentication and roles

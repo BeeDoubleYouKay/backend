@@ -43,6 +43,7 @@ router.get('/holdings', requireAuth, async (req, res) => {
           s.industry AS industry,
           s.country AS country,
           s.exchange AS exchange,
+          s.market_cap AS "marketCap",
           ph.quantity AS quantity,
           ph.average_cost_price AS "averageCostPrice"
         FROM "PortfolioHolding" ph
@@ -62,6 +63,7 @@ router.get('/holdings', requireAuth, async (req, res) => {
       industry: r.industry ?? null,
       country: r.country ?? null,
       exchange: r.exchange ?? null,
+      marketCap: r.marketCap != null ? Number(r.marketCap) : null,
       quantity: Number(r.quantity ?? 0),
       averageCostPrice: Number(r.averageCostPrice ?? 0),
     })));
