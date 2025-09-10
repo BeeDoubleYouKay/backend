@@ -9,5 +9,6 @@
     "strict": true,
     "skipLibCheck": true
   },
-  "exclude": ["prisma/**"]
+  "include": ["src/**/*"],
+  "exclude": ["prisma/**", "verify-*.ts", "verify-*.js", "*.test.*", "**/*.test.*"]
 }

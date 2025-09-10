@@ -13,6 +13,8 @@ const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const client_1 = require("@prisma/client");
 const auth_1 = __importDefault(require("./routes/auth"));
 const portfolio_1 = __importDefault(require("./routes/portfolio"));
+const analytics_simple_1 = __importDefault(require("./routes/analytics-simple"));
+const notifications_1 = __importDefault(require("./routes/notifications"));
 dotenv_1.default.config();
 exports.app = (0, express_1.default)();
 const prisma = new client_1.PrismaClient();
@@ -71,7 +73,7 @@ exports.app.get('/stocks/search', async (req, res) => {
         // Use parameterized query to prevent SQL injection and handle special chars
         const results = await prisma.$queryRawUnsafe(`
       SELECT
-        id, ticker, close, description, sector, exchange, industry, currency,
+        id, ticker, close, description, sector, exchange, industry, country, currency,
         fundamental_currency_code AS "fundamentalCurrencyCode",
         market_cap AS "marketCap",
         -- Rank: 2 = exact match, 1 = startswith, 0 = fuzzy
@@ -98,7 +100,7 @@ exports.app.get('/stocks/search', async (req, res) => {
         const stocks = results.map(r => {
             const currencyRaw = (0, fx_1.normalizeCode)(r.currency) || 'USD';
             const closeRaw = Number(r.close);
-            const { amount: closeNorm, currency } = (0, fx_1.normalizeToMarketCurrency)(closeRaw, currencyRaw);
+            const { amount: closeNorm } = (0, fx_1.normalizeToMarketCurrency)(closeRaw, currencyRaw);
             return {
                 id: r.id,
                 ticker: r.ticker,
@@ -107,8 +109,9 @@ exports.app.get('/stocks/search', async (req, res) => {
                 sector: r.sector ?? null,
                 exchange: r.exchange,
                 industry: r.industry ?? null,
+                country: r.country ?? null,
                 marketCap: r.marketCap != null ? Number(r.marketCap) : null,
-                currency,
+                currency: currencyRaw,
                 fundamentalCurrencyCode: (0, fx_1.normalizeCode)(r.fundamentalCurrencyCode),
                 closeNormalized: Number(closeNorm.toFixed(6)),
             };
@@ -136,6 +139,8 @@ exports.app.get('/stocks/:symbol', async (req, res) => {
 // Mount auth routes with rate limiting and CSRF protection where applicable
 exports.app.use('/auth', authLimiter, auth_1.default);
 exports.app.use('/portfolio', portfolio_1.default);
+exports.app.use('/analytics', analytics_simple_1.default);
+exports.app.use('/notifications', notifications_1.default);
 // Expose a route to fetch CSRF token for single-page apps
 exports.app.get('/csrf-token', csrfProtection, (req, res) => {
     // csurf will set a cookie; send token in response body for client to read and use in X-XSRF-TOKEN header

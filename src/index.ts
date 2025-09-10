@@ -7,6 +7,8 @@ import rateLimit from 'express-rate-limit';
 import { PrismaClient } from '@prisma/client';
 import authRouter from './routes/auth';
 import portfolioRouter from './routes/portfolio';
+import analyticsRouter from './routes/analytics-simple';
+import notificationsRouter from './routes/notifications';
 
 dotenv.config();
 
@@ -157,6 +159,8 @@ app.get('/stocks/:symbol', async (req: Request, res: Response) => {
 // Mount auth routes with rate limiting and CSRF protection where applicable
 app.use('/auth', authLimiter, authRouter);
 app.use('/portfolio', portfolioRouter);
+app.use('/analytics', analyticsRouter);
+app.use('/notifications', notificationsRouter);
 
 // Expose a route to fetch CSRF token for single-page apps
 app.get('/csrf-token', csrfProtection, (req: Request, res: Response) => {
