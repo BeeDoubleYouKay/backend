@@ -74,7 +74,7 @@ app.get('/stocks/search', async (req: Request, res: Response) => {
     // Use parameterized query to prevent SQL injection and handle special chars
     const results = await prisma.$queryRawUnsafe<any[]>(`
       SELECT
-        id, ticker, close, description, sector, exchange, industry, currency,
+        id, ticker, close, description, sector, exchange, industry, country, currency,
         fundamental_currency_code AS "fundamentalCurrencyCode",
         market_cap AS "marketCap",
         -- Rank: 2 = exact match, 1 = startswith, 0 = fuzzy
@@ -108,6 +108,7 @@ app.get('/stocks/search', async (req: Request, res: Response) => {
       sector: string | null;
       exchange: string;
       industry: string | null;
+      country: string | null;
       marketCap: number | null;
       currency: string; // normalized market currency
       fundamentalCurrencyCode?: string | null;
@@ -117,7 +118,7 @@ app.get('/stocks/search', async (req: Request, res: Response) => {
     const stocks: SearchStock[] = results.map(r => {
       const currencyRaw = normalizeCode(r.currency) || 'USD';
       const closeRaw = Number(r.close);
-      const { amount: closeNorm, currency } = normalizeToMarketCurrency(closeRaw, currencyRaw);
+      const { amount: closeNorm } = normalizeToMarketCurrency(closeRaw, currencyRaw);
       return {
         id: r.id,
         ticker: r.ticker,
@@ -126,8 +127,9 @@ app.get('/stocks/search', async (req: Request, res: Response) => {
         sector: r.sector ?? null,
         exchange: r.exchange,
         industry: r.industry ?? null,
+        country: r.country ?? null,
         marketCap: r.marketCap != null ? Number(r.marketCap) : null,
-        currency,
+        currency: currencyRaw,
         fundamentalCurrencyCode: normalizeCode(r.fundamentalCurrencyCode),
         closeNormalized: Number(closeNorm.toFixed(6)),
       };

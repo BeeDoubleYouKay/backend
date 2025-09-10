@@ -72,7 +72,8 @@ router.get('/holdings', requireAuth, async (req, res) => {
         industry: r.industry ?? null,
         country: r.country ?? null,
         exchange: r.exchange ?? null,
-        currency: normalizedCurrency, // normalized market currency for display
+        currency: stockCurrency,
+        currencyNormalized: normalizedCurrency,
         fundamentalCurrencyCode: normalizeCode(r.fundamentalCurrencyCode) ?? null,
         marketCap: r.marketCap != null ? Number(r.marketCap) : null,
         quantity: qty,
@@ -104,12 +105,79 @@ router.post('/holdings', requireAuth, async (req, res) => {
   if (avg < 0) return res.status(400).json({ error: 'averageCostPrice must be >= 0' });
   try {
     const portfolio = await getOrCreateDefaultPortfolio(userId);
-    const holding = await prisma.portfolioHolding.upsert({
+    await prisma.portfolioHolding.upsert({
       where: { portfolioId_stockId: { portfolioId: portfolio.id, stockId: sId } },
       create: { portfolioId: portfolio.id, stockId: sId, quantity: qty, averageCostPrice: avg },
       update: { quantity: qty, averageCostPrice: avg },
     });
-    res.status(201).json({ id: holding.id, portfolioId: holding.portfolioId, stockId: holding.stockId, quantity: holding.quantity, averageCostPrice: holding.averageCostPrice });
+
+    // Return a consistent shape with GET /portfolio/holdings for easier client updates
+    const rows = await prisma.$queryRawUnsafe<any[]>(
+      `
+        SELECT
+          ph.stock_id AS "stockId",
+          s.ticker AS ticker,
+          s.close AS close,
+          s.description AS description,
+          s.sector AS sector,
+          s.industry AS industry,
+          s.country AS country,
+          s.exchange AS exchange,
+          s.market_cap AS "marketCap",
+          s.currency AS currency,
+          s.fundamental_currency_code AS "fundamentalCurrencyCode",
+          ph.quantity AS quantity,
+          ph.average_cost_price AS "averageCostPrice"
+        FROM "PortfolioHolding" ph
+        JOIN "Stock" s ON s.id = ph.stock_id
+        WHERE ph.portfolio_id = $1 AND ph.stock_id = $2
+        LIMIT 1
+      `,
+      portfolio.id,
+      sId
+    );
+
+    if (rows.length === 0) {
+      return res.status(201).json({
+        stockId: sId,
+        ticker: undefined,
+        close: 0,
+        description: null,
+        sector: null,
+        industry: null,
+        country: null,
+        exchange: null,
+        marketCap: null,
+        currency: null,
+        fundamentalCurrencyCode: null,
+        quantity: qty,
+        averageCostPrice: avg,
+      });
+    }
+
+    const r = rows[0];
+    const stockCurrency = normalizeCode(r.currency) || 'USD';
+    const closeRaw = typeof r.close === 'string' ? Number(r.close) : Number(r.close ?? 0);
+    const quantityOut = Number(r.quantity ?? 0);
+    const { amount: closeNormalized } = normalizeToMarketCurrency(closeRaw, stockCurrency);
+    const marketValueNormalized = closeNormalized * quantityOut;
+    res.status(201).json({
+      stockId: Number(r.stockId),
+      ticker: r.ticker,
+      close: closeRaw,
+      description: r.description ?? null,
+      sector: r.sector ?? null,
+      industry: r.industry ?? null,
+      country: r.country ?? null,
+      exchange: r.exchange ?? null,
+      currency: stockCurrency,
+      fundamentalCurrencyCode: normalizeCode(r.fundamentalCurrencyCode) ?? null,
+      marketCap: r.marketCap != null ? Number(r.marketCap) : null,
+      quantity: quantityOut,
+      averageCostPrice: Number(r.averageCostPrice ?? 0),
+      closeNormalized: Number(closeNormalized.toFixed(6)),
+      marketValueNormalized: Number(marketValueNormalized.toFixed(2)),
+    });
   } catch (err: any) {
     console.error(err);
     if (err?.code === 'P2003') {
