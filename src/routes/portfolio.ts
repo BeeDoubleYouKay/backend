@@ -1,5 +1,6 @@
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
+import { normalizeCode, normalizeToMarketCurrency } from '../lib/fx';
 import { requireAuth } from '../services/auth';
 
 const router = express.Router();
@@ -44,6 +45,8 @@ router.get('/holdings', requireAuth, async (req, res) => {
           s.country AS country,
           s.exchange AS exchange,
           s.market_cap AS "marketCap",
+          s.currency AS currency,
+          s.fundamental_currency_code AS "fundamentalCurrencyCode",
           ph.quantity AS quantity,
           ph.average_cost_price AS "averageCostPrice"
         FROM "PortfolioHolding" ph
@@ -54,19 +57,33 @@ router.get('/holdings', requireAuth, async (req, res) => {
       portfolio.id
     );
 
-    res.json(rows.map(r => ({
-      stockId: Number(r.stockId),
-      ticker: r.ticker,
-      close: typeof r.close === 'string' ? Number(r.close) : Number(r.close ?? 0),
-      description: r.description ?? null,
-      sector: r.sector ?? null,
-      industry: r.industry ?? null,
-      country: r.country ?? null,
-      exchange: r.exchange ?? null,
-      marketCap: r.marketCap != null ? Number(r.marketCap) : null,
-      quantity: Number(r.quantity ?? 0),
-      averageCostPrice: Number(r.averageCostPrice ?? 0),
-    })));
+    const out = rows.map((r) => {
+      const stockCurrency = normalizeCode(r.currency) || 'USD';
+      const closeRaw = typeof r.close === 'string' ? Number(r.close) : Number(r.close ?? 0);
+      const qty = Number(r.quantity ?? 0);
+      const { amount: closeNormalized, currency: normalizedCurrency } = normalizeToMarketCurrency(closeRaw, stockCurrency);
+      const marketValueNormalized = closeNormalized * qty;
+      return {
+        stockId: Number(r.stockId),
+        ticker: r.ticker,
+        close: closeRaw,
+        description: r.description ?? null,
+        sector: r.sector ?? null,
+        industry: r.industry ?? null,
+        country: r.country ?? null,
+        exchange: r.exchange ?? null,
+        currency: normalizedCurrency, // normalized market currency for display
+        fundamentalCurrencyCode: normalizeCode(r.fundamentalCurrencyCode) ?? null,
+        marketCap: r.marketCap != null ? Number(r.marketCap) : null,
+        quantity: qty,
+        averageCostPrice: Number(r.averageCostPrice ?? 0),
+        // New normalized fields
+        closeNormalized: Number(closeNormalized.toFixed(6)),
+        marketValueNormalized: Number(marketValueNormalized.toFixed(2)),
+      };
+    });
+
+    res.json(out);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to fetch holdings' });

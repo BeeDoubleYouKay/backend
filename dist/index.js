@@ -53,6 +53,7 @@ exports.app.get('/stocks', async (req, res) => {
     }
 });
 const lru_cache_1 = require("lru-cache");
+const fx_1 = require("./lib/fx");
 const stockSearchCache = new lru_cache_1.LRUCache({
     max: 200,
     ttl: 1000 * 60 * 5 // 5 minutes
@@ -62,7 +63,7 @@ exports.app.get('/stocks/search', async (req, res) => {
     if (!query || query.length < 2) {
         return res.status(400).json({ error: 'Query must be at least 2 characters.' });
     }
-    const cacheKey = query.toLowerCase();
+    const cacheKey = `${query.toLowerCase()}`;
     if (stockSearchCache.has(cacheKey)) {
         return res.json(stockSearchCache.get(cacheKey));
     }
@@ -70,7 +71,8 @@ exports.app.get('/stocks/search', async (req, res) => {
         // Use parameterized query to prevent SQL injection and handle special chars
         const results = await prisma.$queryRawUnsafe(`
       SELECT
-        id, ticker, close, description, sector, exchange, industry,
+        id, ticker, close, description, sector, exchange, industry, currency,
+        fundamental_currency_code AS "fundamentalCurrencyCode",
         market_cap AS "marketCap",
         -- Rank: 2 = exact match, 1 = startswith, 0 = fuzzy
         CASE
@@ -93,16 +95,24 @@ exports.app.get('/stocks/search', async (req, res) => {
       ORDER BY match_rank DESC, relevance DESC
       LIMIT 20
     `, query);
-        const stocks = results.map(r => ({
-            id: r.id,
-            ticker: r.ticker,
-            close: Number(r.close),
-            description: r.description,
-            sector: r.sector ?? null,
-            exchange: r.exchange,
-            industry: r.industry ?? null,
-            marketCap: r.marketCap != null ? Number(r.marketCap) : null
-        }));
+        const stocks = results.map(r => {
+            const currencyRaw = (0, fx_1.normalizeCode)(r.currency) || 'USD';
+            const closeRaw = Number(r.close);
+            const { amount: closeNorm, currency } = (0, fx_1.normalizeToMarketCurrency)(closeRaw, currencyRaw);
+            return {
+                id: r.id,
+                ticker: r.ticker,
+                close: closeRaw,
+                description: r.description,
+                sector: r.sector ?? null,
+                exchange: r.exchange,
+                industry: r.industry ?? null,
+                marketCap: r.marketCap != null ? Number(r.marketCap) : null,
+                currency,
+                fundamentalCurrencyCode: (0, fx_1.normalizeCode)(r.fundamentalCurrencyCode),
+                closeNormalized: Number(closeNorm.toFixed(6)),
+            };
+        });
         stockSearchCache.set(cacheKey, stocks);
         res.json(stocks);
     }

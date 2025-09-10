@@ -54,6 +54,7 @@ app.get('/stocks', async (req: Request, res: Response) => {
 });
 
 import { LRUCache } from 'lru-cache';
+import { normalizeCode, normalizeToMarketCurrency } from './lib/fx';
 
 const stockSearchCache = new LRUCache<string, any[]>({
   max: 200,
@@ -65,7 +66,7 @@ app.get('/stocks/search', async (req: Request, res: Response) => {
   if (!query || query.length < 2) {
     return res.status(400).json({ error: 'Query must be at least 2 characters.' });
   }
-  const cacheKey = query.toLowerCase();
+  const cacheKey = `${query.toLowerCase()}`;
   if (stockSearchCache.has(cacheKey)) {
     return res.json(stockSearchCache.get(cacheKey));
   }
@@ -73,7 +74,8 @@ app.get('/stocks/search', async (req: Request, res: Response) => {
     // Use parameterized query to prevent SQL injection and handle special chars
     const results = await prisma.$queryRawUnsafe<any[]>(`
       SELECT
-        id, ticker, close, description, sector, exchange, industry,
+        id, ticker, close, description, sector, exchange, industry, currency,
+        fundamental_currency_code AS "fundamentalCurrencyCode",
         market_cap AS "marketCap",
         -- Rank: 2 = exact match, 1 = startswith, 0 = fuzzy
         CASE
@@ -107,18 +109,29 @@ app.get('/stocks/search', async (req: Request, res: Response) => {
       exchange: string;
       industry: string | null;
       marketCap: number | null;
+      currency: string; // normalized market currency
+      fundamentalCurrencyCode?: string | null;
+      closeNormalized?: number | null;
     }
 
-    const stocks: SearchStock[] = results.map(r => ({
-      id: r.id,
-      ticker: r.ticker,
-      close: Number(r.close),
-      description: r.description,
-      sector: r.sector ?? null,
-      exchange: r.exchange,
-      industry: r.industry ?? null,
-      marketCap: r.marketCap != null ? Number(r.marketCap) : null
-    }));
+    const stocks: SearchStock[] = results.map(r => {
+      const currencyRaw = normalizeCode(r.currency) || 'USD';
+      const closeRaw = Number(r.close);
+      const { amount: closeNorm, currency } = normalizeToMarketCurrency(closeRaw, currencyRaw);
+      return {
+        id: r.id,
+        ticker: r.ticker,
+        close: closeRaw,
+        description: r.description,
+        sector: r.sector ?? null,
+        exchange: r.exchange,
+        industry: r.industry ?? null,
+        marketCap: r.marketCap != null ? Number(r.marketCap) : null,
+        currency,
+        fundamentalCurrencyCode: normalizeCode(r.fundamentalCurrencyCode),
+        closeNormalized: Number(closeNorm.toFixed(6)),
+      };
+    });
 
     stockSearchCache.set(cacheKey, stocks);
     res.json(stocks);

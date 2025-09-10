@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const client_1 = require("@prisma/client");
+const fx_1 = require("../lib/fx");
 const auth_1 = require("../services/auth");
 const router = express_1.default.Router();
 const prisma = new client_1.PrismaClient();
@@ -45,6 +46,8 @@ router.get('/holdings', auth_1.requireAuth, async (req, res) => {
           s.country AS country,
           s.exchange AS exchange,
           s.market_cap AS "marketCap",
+          s.currency AS currency,
+          s.fundamental_currency_code AS "fundamentalCurrencyCode",
           ph.quantity AS quantity,
           ph.average_cost_price AS "averageCostPrice"
         FROM "PortfolioHolding" ph
@@ -52,19 +55,32 @@ router.get('/holdings', auth_1.requireAuth, async (req, res) => {
         WHERE ph.portfolio_id = $1
         ORDER BY s.ticker ASC
       `, portfolio.id);
-        res.json(rows.map(r => ({
-            stockId: Number(r.stockId),
-            ticker: r.ticker,
-            close: typeof r.close === 'string' ? Number(r.close) : Number(r.close ?? 0),
-            description: r.description ?? null,
-            sector: r.sector ?? null,
-            industry: r.industry ?? null,
-            country: r.country ?? null,
-            exchange: r.exchange ?? null,
-            marketCap: r.marketCap != null ? Number(r.marketCap) : null,
-            quantity: Number(r.quantity ?? 0),
-            averageCostPrice: Number(r.averageCostPrice ?? 0),
-        })));
+        const out = rows.map((r) => {
+            const stockCurrency = (0, fx_1.normalizeCode)(r.currency) || 'USD';
+            const closeRaw = typeof r.close === 'string' ? Number(r.close) : Number(r.close ?? 0);
+            const qty = Number(r.quantity ?? 0);
+            const { amount: closeNormalized, currency: normalizedCurrency } = (0, fx_1.normalizeToMarketCurrency)(closeRaw, stockCurrency);
+            const marketValueNormalized = closeNormalized * qty;
+            return {
+                stockId: Number(r.stockId),
+                ticker: r.ticker,
+                close: closeRaw,
+                description: r.description ?? null,
+                sector: r.sector ?? null,
+                industry: r.industry ?? null,
+                country: r.country ?? null,
+                exchange: r.exchange ?? null,
+                currency: normalizedCurrency, // normalized market currency for display
+                fundamentalCurrencyCode: (0, fx_1.normalizeCode)(r.fundamentalCurrencyCode) ?? null,
+                marketCap: r.marketCap != null ? Number(r.marketCap) : null,
+                quantity: qty,
+                averageCostPrice: Number(r.averageCostPrice ?? 0),
+                // New normalized fields
+                closeNormalized: Number(closeNormalized.toFixed(6)),
+                marketValueNormalized: Number(marketValueNormalized.toFixed(2)),
+            };
+        });
+        res.json(out);
     }
     catch (err) {
         console.error(err);

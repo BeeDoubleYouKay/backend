@@ -64,6 +64,7 @@ async function seedStocks() {
             exchange: 'NASDAQ',
             country: 'US',
             currency: 'USD',
+            fundamentalCurrencyCode: 'USD',
             industry: 'Software'
         });
     }
