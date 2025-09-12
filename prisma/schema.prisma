@@ -82,9 +82,9 @@ model Stock {
   exchange    String
   country     String?
   currency    String
-  fundamentalCurrencyCode String? @map("fundamental_currency_code")
   industry    String?
   // Total market capitalization in the listing currency
+  fundamentalCurrencyCode String? @map("fundamental_currency_code")
   marketCap   Float?   @map("market_cap")
 }
 
